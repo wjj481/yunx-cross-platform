@@ -1,0 +1,90 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            ffmpeg \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-mixer-dev \
+            libsdl2-ttf-dev \
+            libportmidi-dev \
+            libswscale-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            zlib1g-dev \
+            zip \
+            unzip \
+            openjdk-17-jdk \
+            autoconf \
+            libtool \
+            pkg-config \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libtinfo5 \
+            cmake \
+            ccache
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+
+      - name: Install Python dependencies
+        run: |
+          pip3 install --upgrade pip
+          pip3 install buildozer cython==0.29.37
+          pip3 install -r requirements-core.txt
+
+      - name: Build APK with Buildozer
+        run: |
+          cd mobile_gui
+          # Ensure buildozer.spec exists
+          if [ ! -f buildozer.spec ]; then
+            echo "buildozer.spec not found, generating..."
+            buildozer init
+            # Patch the spec for our app
+          fi
+          buildozer -v android debug
+        timeout-minutes: 150
+        continue-on-error: true
+
+      - name: Find and copy APK
+        run: |
+          mkdir -p dist
+          APK_FILE=$(find . -name "*.apk" -path "*/bin/*" | head -1)
+          if [ -n "$APK_FILE" ]; then
+            cp "$APK_FILE" "dist/YunX-Android-${{ github.ref_name }}.apk"
+            echo "APK found: $APK_FILE"
+          else
+            echo "No APK found, listing bin directory..."
+            find . -name "*.apk" 2>/dev/null || true
+            ls -la mobile_gui/bin/ 2>/dev/null || true
+          fi
+          ls -la dist/ 2>/dev/null || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YunX-Android
+          path: dist/
+          retention-days: 30

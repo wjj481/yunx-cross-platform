@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 下载临时文件
+*.part
+*.part*.tmp
+*.yunx_download.json
+*.tmp
+
+# 配置（含加密凭证，不应提交）
+.yunx/
+config.enc
+salt.bin
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 打包输出
+*.spec
+dist/
+build/

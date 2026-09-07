@@ -1,0 +1,15 @@
+# 核心引擎依赖
+-r requirements-core.txt
+
+# 桌面端 GUI（tkinter 为 Python 内置，无需安装；此处注明）
+# tkinter — Python 标准库，随 Python 安装
+
+# 移动端 GUI
+kivy>=2.3.0
+
+# 打包工具
+pyinstaller>=6.0.0
+
+# 测试
+pytest>=7.4.0
+pytest-mock>=3.11.0
