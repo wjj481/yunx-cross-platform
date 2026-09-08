@@ -1,7 +1,9 @@
 """
-设置页标签页。
+设置页标签页（v0.3.0）。
 
 包含下载设置（默认目录、并发数、分片大小、剪贴板监听）、
+视频下载设置（默认清晰度、视频目录）、
+音乐下载设置（默认音质、音乐目录、ID3标签、封面下载）、
 外观（主题切换）、配置管理（导出/导入）、关于信息。
 """
 
@@ -20,8 +22,16 @@ from ..dialogs.settings import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_CLIPBOARD_MONITOR,
     DEFAULT_CONCURRENCY,
+    DEFAULT_MUSIC_DOWNLOAD_COVER,
+    DEFAULT_MUSIC_EMBED_ID3,
+    DEFAULT_MUSIC_OUTPUT_DIR,
+    DEFAULT_MUSIC_QUALITY,
     DEFAULT_SAVE_PATH,
     DEFAULT_SOUND_NOTIFY,
+    DEFAULT_VIDEO_OUTPUT_DIR,
+    DEFAULT_VIDEO_QUALITY,
+    MUSIC_QUALITY_OPTIONS,
+    VIDEO_QUALITY_OPTIONS,
 )
 from ..theme import THEME_DISPLAY_NAMES
 
@@ -29,7 +39,7 @@ from ..theme import THEME_DISPLAY_NAMES
 class SettingsPage(ttk.Frame):
     """设置页标签页。
 
-    分区展示下载设置、外观、配置管理和关于信息。
+    分区展示下载设置、视频设置、音乐设置、外观、配置管理和关于信息。
     """
 
     def __init__(
@@ -62,6 +72,16 @@ class SettingsPage(ttk.Frame):
         self._clipboard_monitor = DEFAULT_CLIPBOARD_MONITOR
         self._sound_notify = DEFAULT_SOUND_NOTIFY
         self._theme = "light"
+
+        # 视频设置
+        self._video_quality = DEFAULT_VIDEO_QUALITY
+        self._video_output_dir = DEFAULT_VIDEO_OUTPUT_DIR
+
+        # 音乐设置
+        self._music_quality = DEFAULT_MUSIC_QUALITY
+        self._music_output_dir = DEFAULT_MUSIC_OUTPUT_DIR
+        self._music_embed_id3 = DEFAULT_MUSIC_EMBED_ID3
+        self._music_download_cover = DEFAULT_MUSIC_DOWNLOAD_COVER
 
         self._build_ui()
 
@@ -161,6 +181,103 @@ class SettingsPage(ttk.Frame):
         ).pack(anchor=tk.E, pady=(8, 0))
 
         # ==================================================================
+        # 视频下载设置
+        # ==================================================================
+        video_section = ttk.LabelFrame(content, text="视频下载设置", padding=12)
+        video_section.pack(fill=tk.X, padx=2, pady=(0, 10))
+
+        # 默认清晰度
+        row = ttk.Frame(video_section)
+        row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row, text="默认清晰度：", width=14).pack(side=tk.LEFT)
+        self._video_quality_var = tk.StringVar()
+        video_quality_combo = ttk.Combobox(
+            row, textvariable=self._video_quality_var,
+            values=VIDEO_QUALITY_OPTIONS,
+            state="readonly", width=12,
+        )
+        video_quality_combo.pack(side=tk.LEFT)
+        # 设置默认值
+        default_vq = "自动最佳" if self._video_quality == "auto" else self._video_quality
+        if default_vq in VIDEO_QUALITY_OPTIONS:
+            self._video_quality_var.set(default_vq)
+        else:
+            self._video_quality_var.set(VIDEO_QUALITY_OPTIONS[0])
+        video_quality_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_settings())
+
+        # 视频下载目录
+        row = ttk.Frame(video_section)
+        row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row, text="视频下载目录：", width=14).pack(side=tk.LEFT)
+        self._video_path_var = tk.StringVar(value=self._video_output_dir)
+        ttk.Entry(row, textvariable=self._video_path_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6)
+        )
+        ttk.Button(row, text="浏览...", width=8, command=self._browse_video_path).pack(
+            side=tk.LEFT
+        )
+
+        ttk.Label(
+            video_section,
+            text="支持平台：哔哩哔哩、抖音、YouTube（完整）；其他平台实验性支持",
+            foreground="#888", font=("", 9),
+        ).pack(anchor=tk.W)
+
+        # ==================================================================
+        # 音乐下载设置
+        # ==================================================================
+        music_section = ttk.LabelFrame(content, text="音乐下载设置", padding=12)
+        music_section.pack(fill=tk.X, padx=2, pady=(0, 10))
+
+        # 默认音质
+        row = ttk.Frame(music_section)
+        row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row, text="默认音质：", width=14).pack(side=tk.LEFT)
+        self._music_quality_var = tk.StringVar()
+        music_quality_values = list(MUSIC_QUALITY_OPTIONS.values())
+        music_quality_combo = ttk.Combobox(
+            row, textvariable=self._music_quality_var,
+            values=music_quality_values,
+            state="readonly", width=16,
+        )
+        music_quality_combo.pack(side=tk.LEFT)
+        default_mq = MUSIC_QUALITY_OPTIONS.get(self._music_quality, self._music_quality)
+        self._music_quality_var.set(default_mq)
+        music_quality_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_settings())
+
+        # 音乐下载目录
+        row = ttk.Frame(music_section)
+        row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row, text="音乐下载目录：", width=14).pack(side=tk.LEFT)
+        self._music_path_var = tk.StringVar(value=self._music_output_dir)
+        ttk.Entry(row, textvariable=self._music_path_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6)
+        )
+        ttk.Button(row, text="浏览...", width=8, command=self._browse_music_path).pack(
+            side=tk.LEFT
+        )
+
+        # 自动嵌入ID3标签
+        self._music_embed_id3_var = tk.BooleanVar(value=self._music_embed_id3)
+        ttk.Checkbutton(
+            music_section, text="自动嵌入 ID3 标签（歌名/歌手/专辑/封面）",
+            variable=self._music_embed_id3_var, command=self._save_settings,
+        ).pack(anchor=tk.W, pady=(0, 4))
+
+        # 自动下载封面
+        self._music_cover_var = tk.BooleanVar(value=self._music_download_cover)
+        ttk.Checkbutton(
+            music_section, text="自动下载封面并嵌入标签",
+            variable=self._music_cover_var, command=self._save_settings,
+        ).pack(anchor=tk.W)
+
+        ttk.Label(
+            music_section,
+            text="支持平台：网易云音乐、QQ音乐（完整）；酷狗、酷我实验性支持",
+            foreground="#888", font=("", 9),
+        ).pack(anchor=tk.W, pady=(4, 0))
+
+        # ==================================================================
         # 外观
         # ==================================================================
         appearance_section = ttk.LabelFrame(content, text="外观", padding=12)
@@ -220,7 +337,8 @@ class SettingsPage(ttk.Frame):
 
         about_text = (
             "全平台网盘解析 + 高速下载工具\n"
-            "支持夸克、123云盘、迅雷、百度、UC、和彩云\n\n"
+            "支持夸克、123云盘、迅雷、百度、UC、和彩云\n"
+            "新增：视频解析下载、音乐解析下载、云盘上传\n\n"
             "桌面端：tkinter + ttk（Material 3 风格）\n"
             "核心引擎：Python 3.10+\n"
             "下载引擎：Range 分片并发 + 断点续传\n"
@@ -256,6 +374,17 @@ class SettingsPage(ttk.Frame):
         self._sound_notify = bool(settings.get("sound_notify", DEFAULT_SOUND_NOTIFY))
         self._theme = settings.get("theme", "light")
 
+        # 视频设置
+        self._video_quality = settings.get("video_quality", DEFAULT_VIDEO_QUALITY)
+        self._video_output_dir = settings.get("video_output_dir", DEFAULT_VIDEO_OUTPUT_DIR)
+
+        # 音乐设置
+        self._music_quality = settings.get("music_quality", DEFAULT_MUSIC_QUALITY)
+        self._music_output_dir = settings.get("music_output_dir", DEFAULT_MUSIC_OUTPUT_DIR)
+        self._music_embed_id3 = bool(settings.get("music_embed_id3", DEFAULT_MUSIC_EMBED_ID3))
+        self._music_download_cover = bool(settings.get("music_download_cover", DEFAULT_MUSIC_DOWNLOAD_COVER))
+
+        # 更新 UI
         self._path_var.set(self._save_path)
         self._conc_var.set(self._concurrency)
         self._conc_label.config(text=str(self._concurrency))
@@ -269,8 +398,33 @@ class SettingsPage(ttk.Frame):
         self._sound_var.set(self._sound_notify)
         self._theme_var.set(THEME_DISPLAY_NAMES.get(self._theme, "浅色"))
 
+        # 视频
+        vq_display = "自动最佳" if self._video_quality == "auto" else self._video_quality
+        if vq_display in VIDEO_QUALITY_OPTIONS:
+            self._video_quality_var.set(vq_display)
+        self._video_path_var.set(self._video_output_dir)
+
+        # 音乐
+        mq_display = MUSIC_QUALITY_OPTIONS.get(self._music_quality, self._music_quality)
+        self._music_quality_var.set(mq_display)
+        self._music_path_var.set(self._music_output_dir)
+        self._music_embed_id3_var.set(self._music_embed_id3)
+        self._music_cover_var.set(self._music_download_cover)
+
     def get_settings(self) -> dict[str, Any]:
         """获取当前设置。"""
+        # 视频清晰度反查
+        vq_display = self._video_quality_var.get()
+        video_quality = "auto" if vq_display == "自动最佳" else vq_display
+
+        # 音乐音质反查
+        mq_display = self._music_quality_var.get()
+        music_quality = self._music_quality
+        for k, v in MUSIC_QUALITY_OPTIONS.items():
+            if v == mq_display:
+                music_quality = k
+                break
+
         return {
             "save_path": self._path_var.get().strip() or DEFAULT_SAVE_PATH,
             "concurrency": int(self._conc_var.get()),
@@ -278,6 +432,14 @@ class SettingsPage(ttk.Frame):
             "clipboard_monitor": self._clipboard_var.get(),
             "sound_notify": self._sound_var.get(),
             "theme": self._theme,
+            # 视频
+            "video_quality": video_quality,
+            "video_output_dir": self._video_path_var.get().strip() or DEFAULT_VIDEO_OUTPUT_DIR,
+            # 音乐
+            "music_quality": music_quality,
+            "music_output_dir": self._music_path_var.get().strip() or DEFAULT_MUSIC_OUTPUT_DIR,
+            "music_embed_id3": self._music_embed_id3_var.get(),
+            "music_download_cover": self._music_cover_var.get(),
         }
 
     # ==================================================================
@@ -293,6 +455,28 @@ class SettingsPage(ttk.Frame):
         )
         if path:
             self._path_var.set(path)
+            self._save_settings()
+
+    def _browse_video_path(self) -> None:
+        """浏览选择视频下载目录。"""
+        path = filedialog.askdirectory(
+            title="选择视频下载目录",
+            initialdir=self._video_path_var.get() or str(Path.home()),
+            parent=self,
+        )
+        if path:
+            self._video_path_var.set(path)
+            self._save_settings()
+
+    def _browse_music_path(self) -> None:
+        """浏览选择音乐下载目录。"""
+        path = filedialog.askdirectory(
+            title="选择音乐下载目录",
+            initialdir=self._music_path_var.get() or str(Path.home()),
+            parent=self,
+        )
+        if path:
+            self._music_path_var.set(path)
             self._save_settings()
 
     def _on_conc_change(self, _value: str) -> None:
@@ -357,6 +541,7 @@ class SettingsPage(ttk.Frame):
             "各网盘平台的用户协议。\n\n"
             "  • 不得用于下载侵权、违法或未经授权的内容\n"
             "  • 不得用于商业用途或大规模批量下载\n"
+            "  • 视频/音乐内容仅供个人学习，下载后请于24小时内删除\n"
             "  • 使用本工具导致的账号封禁等后果由用户自行承担\n"
             "  • 开发者不对因使用本工具造成的任何损失负责\n\n"
             "请合理、合法地使用本工具。"

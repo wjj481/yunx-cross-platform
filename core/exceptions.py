@@ -41,3 +41,22 @@ class BaiduRiskWarning(YunXError):
 
 class AuthenticationError(YunXError):
     """认证失败（Cookie 过期、Token 无效、未登录等）。"""
+
+
+class MusicParseError(ParserError):
+    """音乐解析失败。
+
+    继承自 :class:`ParserError`，用于音乐平台解析场景的语义区分。
+    通常由 API 变更、版权受限、音质不可用等触发。
+    """
+
+    def __init__(self, message: str = "音乐解析失败", code: int | None = None) -> None:
+        super().__init__(message, code)
+
+
+class UploadError(YunXError):
+    """上传失败（分片上传、合并、校验等环节出错）。"""
+
+
+class QuotaExceededError(YunXError):
+    """网盘空间不足，无法完成上传。"""

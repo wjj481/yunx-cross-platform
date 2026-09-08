@@ -170,6 +170,170 @@ class SettingsScreen(Screen):
         chunk_card.add_widget(chunk_row)
         content_box.add_widget(chunk_card)
 
+        # -- 视频设置 --
+        content_box.add_widget(self._section_title("视频设置"))
+
+        # 视频默认清晰度
+        video_q_card = self._make_card(dp(80))
+        video_q_header = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(24),
+        )
+        video_q_label = Label(
+            text="默认清晰度", font_size=sp(14), bold=True,
+            halign="left", color=hex_to_rgba(Theme.get("text")),
+        )
+        video_q_label.bind(size=video_q_label.setter("text_size"))
+        self._video_q_value = Label(
+            text="1080p", font_size=sp(14), bold=True,
+            size_hint=(None, None), size=(dp(60), dp(24)),
+            color=hex_to_rgba("#1976D2"),
+        )
+        video_q_header.add_widget(video_q_label)
+        video_q_header.add_widget(self._video_q_value)
+        video_q_row = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(36), spacing=dp(4),
+        )
+        self._video_q_buttons: list[MaterialButton] = []
+        video_qualities = ["1080p", "720p", "480p", "自动"]
+        for i, q in enumerate(video_qualities):
+            btn = MaterialButton(
+                text=q, bg_color="#BDBDBD",
+                font_size=sp(11), height=dp(30),
+            )
+            btn.bind(on_release=lambda inst, idx=i: self._select_video_quality(idx))
+            self._video_q_buttons.append(btn)
+            video_q_row.add_widget(btn)
+        video_q_card.add_widget(video_q_header)
+        video_q_card.add_widget(video_q_row)
+        content_box.add_widget(video_q_card)
+
+        # 视频下载目录
+        video_dir_card = self._make_card(dp(110))
+        video_dir_label = Label(
+            text="视频下载目录", font_size=sp(14), bold=True,
+            halign="left", size_hint_y=None, height=dp(20),
+            color=hex_to_rgba(Theme.get("text")),
+        )
+        video_dir_label.bind(size=video_dir_label.setter("text_size"))
+        self._video_dir_input = TextInput(
+            multiline=False, size_hint_y=None, height=dp(40),
+            font_size=sp(12),
+            background_color=hex_to_rgba(Theme.get("input_bg")),
+            foreground_color=hex_to_rgba(Theme.get("text")),
+            cursor_color=hex_to_rgba("#1976D2"),
+            padding=[dp(8), dp(8)],
+        )
+        save_video_dir_btn = MaterialButton(
+            text="保存", bg_color="#4CAF50",
+            font_size=sp(13), size_hint_y=None, height=dp(32),
+        )
+        save_video_dir_btn.bind(on_release=self._save_video_dir)
+        video_dir_card.add_widget(video_dir_label)
+        video_dir_card.add_widget(self._video_dir_input)
+        video_dir_card.add_widget(save_video_dir_btn)
+        content_box.add_widget(video_dir_card)
+
+        # -- 音乐设置 --
+        content_box.add_widget(self._section_title("音乐设置"))
+
+        # 音乐默认音质
+        music_q_card = self._make_card(dp(80))
+        music_q_header = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(24),
+        )
+        music_q_label = Label(
+            text="默认音质", font_size=sp(14), bold=True,
+            halign="left", color=hex_to_rgba(Theme.get("text")),
+        )
+        music_q_label.bind(size=music_q_label.setter("text_size"))
+        self._music_q_value = Label(
+            text="高品质", font_size=sp(14), bold=True,
+            size_hint=(None, None), size=(dp(80), dp(24)),
+            color=hex_to_rgba("#1976D2"),
+        )
+        music_q_header.add_widget(music_q_label)
+        music_q_header.add_widget(self._music_q_value)
+        music_q_row = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(36), spacing=dp(4),
+        )
+        self._music_q_buttons: list[MaterialButton] = []
+        music_qualities = ["标准", "高品质", "无损"]
+        for i, q in enumerate(music_qualities):
+            btn = MaterialButton(
+                text=q, bg_color="#BDBDBD",
+                font_size=sp(11), height=dp(30),
+            )
+            btn.bind(on_release=lambda inst, idx=i: self._select_music_quality(idx))
+            self._music_q_buttons.append(btn)
+            music_q_row.add_widget(btn)
+        music_q_card.add_widget(music_q_header)
+        music_q_card.add_widget(music_q_row)
+        content_box.add_widget(music_q_card)
+
+        # 音乐下载目录
+        music_dir_card = self._make_card(dp(110))
+        music_dir_label = Label(
+            text="音乐下载目录", font_size=sp(14), bold=True,
+            halign="left", size_hint_y=None, height=dp(20),
+            color=hex_to_rgba(Theme.get("text")),
+        )
+        music_dir_label.bind(size=music_dir_label.setter("text_size"))
+        self._music_dir_input = TextInput(
+            multiline=False, size_hint_y=None, height=dp(40),
+            font_size=sp(12),
+            background_color=hex_to_rgba(Theme.get("input_bg")),
+            foreground_color=hex_to_rgba(Theme.get("text")),
+            cursor_color=hex_to_rgba("#1976D2"),
+            padding=[dp(8), dp(8)],
+        )
+        save_music_dir_btn = MaterialButton(
+            text="保存", bg_color="#4CAF50",
+            font_size=sp(13), size_hint_y=None, height=dp(32),
+        )
+        save_music_dir_btn.bind(on_release=self._save_music_dir)
+        music_dir_card.add_widget(music_dir_label)
+        music_dir_card.add_widget(self._music_dir_input)
+        music_dir_card.add_widget(save_music_dir_btn)
+        content_box.add_widget(music_dir_card)
+
+        # 音乐开关
+        music_switch_card = self._make_card(dp(100))
+
+        id3_row = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(36),
+        )
+        id3_label = Label(
+            text="自动嵌入 ID3 标签",
+            font_size=sp(14), halign="left",
+            color=hex_to_rgba(Theme.get("text")),
+        )
+        id3_label.bind(size=id3_label.setter("text_size"))
+        self._id3_switch = Switch(
+            active=True, size_hint=(None, None), size=(dp(50), dp(30)),
+        )
+        self._id3_switch.bind(active=self._on_id3_switch)
+        id3_row.add_widget(id3_label)
+        id3_row.add_widget(self._id3_switch)
+        music_switch_card.add_widget(id3_row)
+
+        cover_row = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(36),
+        )
+        cover_label = Label(
+            text="自动下载封面",
+            font_size=sp(14), halign="left",
+            color=hex_to_rgba(Theme.get("text")),
+        )
+        cover_label.bind(size=cover_label.setter("text_size"))
+        self._cover_switch = Switch(
+            active=True, size_hint=(None, None), size=(dp(50), dp(30)),
+        )
+        self._cover_switch.bind(active=self._on_cover_switch)
+        cover_row.add_widget(cover_label)
+        cover_row.add_widget(self._cover_switch)
+        music_switch_card.add_widget(cover_row)
+        content_box.add_widget(music_switch_card)
+
         # -- 通用设置 --
         content_box.add_widget(self._section_title("通用设置"))
 
@@ -251,21 +415,23 @@ class SettingsScreen(Screen):
 
         # -- 关于 --
         content_box.add_widget(self._section_title("关于"))
-        about_card = self._make_card(dp(160))
+        about_card = self._make_card(dp(200))
         about_text = (
-            "[b]YunX 云析 v0.2.0[/b]\n\n"
+            "[b]YunX 云析 v0.3.0[/b]\n\n"
             "跨平台网盘解析 + 高速下载工具\n"
-            "支持：夸克、123云盘、迅雷、百度、UC、和彩云\n\n"
+            "支持：夸克、123云盘、迅雷、百度、UC、和彩云\n"
+            "新增：视频解析、音乐解析、云盘上传\n\n"
             "[b]GitHub：[/b]github.com/yunx-project/yunx-cross-platform\n\n"
             "[b]免责声明：[/b]\n"
             "本工具仅供学习研究使用，请勿用于商业用途。\n"
+            "请尊重版权，下载内容请于24小时内删除。\n"
             "使用本工具产生的一切后果由使用者自行承担。"
         )
         about_label = Label(
             text=about_text, markup=True,
             font_size=sp(12), halign="left", valign="top",
             color=hex_to_rgba(Theme.get("text_secondary")),
-            size_hint_y=None, height=dp(140),
+            size_hint_y=None, height=dp(180),
         )
         about_label.bind(size=about_label.setter("text_size"))
         about_card.add_widget(about_label)
@@ -354,6 +520,74 @@ class SettingsScreen(Screen):
         app.set_setting("theme", mode)
         app.apply_theme(mode)
         show_toast(self, f"已切换为{'深色' if value else '浅色'}主题")
+
+    # ------------------------------------------------------------------
+    # 视频设置
+    # ------------------------------------------------------------------
+
+    def _select_video_quality(self, index: int) -> None:
+        """选择视频默认清晰度。"""
+        qualities = ["1080p", "720p", "480p", "auto"]
+        labels = ["1080p", "720p", "480p", "自动"]
+        for i, btn in enumerate(self._video_q_buttons):
+            btn.bg_color = "#1976D2" if i == index else "#BDBDBD"
+        self._video_q_value.text = labels[index]
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.set_video_default_quality(qualities[index])
+        show_toast(self, f"默认清晰度：{labels[index]}")
+
+    def _save_video_dir(self, *args: Any) -> None:
+        """保存视频下载目录。"""
+        path = self._video_dir_input.text.strip()
+        if not path:
+            show_toast(self, "目录不能为空")
+            return
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.set_video_download_dir(path)
+        show_toast(self, "视频下载目录已保存")
+
+    # ------------------------------------------------------------------
+    # 音乐设置
+    # ------------------------------------------------------------------
+
+    def _select_music_quality(self, index: int) -> None:
+        """选择音乐默认音质。"""
+        qualities = ["standard", "higher", "lossless"]
+        labels = ["标准", "高品质", "无损"]
+        for i, btn in enumerate(self._music_q_buttons):
+            btn.bg_color = "#1976D2" if i == index else "#BDBDBD"
+        self._music_q_value.text = labels[index]
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.set_music_default_quality(qualities[index])
+        show_toast(self, f"默认音质：{labels[index]}")
+
+    def _save_music_dir(self, *args: Any) -> None:
+        """保存音乐下载目录。"""
+        path = self._music_dir_input.text.strip()
+        if not path:
+            show_toast(self, "目录不能为空")
+            return
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.set_music_download_dir(path)
+        show_toast(self, "音乐下载目录已保存")
+
+    def _on_id3_switch(self, instance: Any, value: bool) -> None:
+        """ID3 标签开关。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.set_music_embed_id3(value)
+        show_toast(self, f"ID3 标签：{'开启' if value else '关闭'}")
+
+    def _on_cover_switch(self, instance: Any, value: bool) -> None:
+        """自动下载封面开关。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.set_music_download_cover(value)
+        show_toast(self, f"自动下载封面：{'开启' if value else '关闭'}")
 
     # ------------------------------------------------------------------
     # 配置导出 / 导入
@@ -457,3 +691,19 @@ class SettingsScreen(Screen):
         # 主题
         theme = app.get_setting("theme", "light")
         self._theme_switch.active = theme == "dark"
+
+        # 视频设置
+        video_quality = app.core.get_video_default_quality()
+        video_qualities = ["1080p", "720p", "480p", "auto"]
+        if video_quality in video_qualities:
+            self._select_video_quality(video_qualities.index(video_quality))
+        self._video_dir_input.text = app.core.get_video_download_dir()
+
+        # 音乐设置
+        music_quality = app.core.get_music_default_quality()
+        music_qualities = ["standard", "higher", "lossless"]
+        if music_quality in music_qualities:
+            self._select_music_quality(music_qualities.index(music_quality))
+        self._music_dir_input.text = app.core.get_music_download_dir()
+        self._id3_switch.active = app.core.get_music_embed_id3()
+        self._cover_switch.active = app.core.get_music_download_cover()

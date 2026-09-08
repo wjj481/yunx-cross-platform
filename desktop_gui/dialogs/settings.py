@@ -25,6 +25,22 @@ DEFAULT_CLIPBOARD_MONITOR = False
 DEFAULT_SOUND_NOTIFY = True
 DEFAULT_THEME = "light"
 
+# 视频下载默认值
+DEFAULT_VIDEO_QUALITY = "1080p"
+DEFAULT_VIDEO_OUTPUT_DIR = str(Path.home() / "Downloads" / "YunX" / "videos")
+VIDEO_QUALITY_OPTIONS = ["自动最佳", "1080p", "720p", "480p"]
+
+# 音乐下载默认值
+DEFAULT_MUSIC_QUALITY = "higher"
+DEFAULT_MUSIC_OUTPUT_DIR = str(Path.home() / "Downloads" / "YunX" / "music")
+DEFAULT_MUSIC_EMBED_ID3 = True
+DEFAULT_MUSIC_DOWNLOAD_COVER = True
+MUSIC_QUALITY_OPTIONS = {
+    "standard": "标准 128kbps",
+    "higher": "高品质 320kbps",
+    "lossless": "无损 FLAC",
+}
+
 # 分片大小选项（显示名 → 字节数）
 CHUNK_SIZE_OPTIONS: dict[str, int] = {
     "1 MB": 1 * 1024 * 1024,

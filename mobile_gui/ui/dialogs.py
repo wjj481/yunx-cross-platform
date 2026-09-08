@@ -28,7 +28,7 @@ from kivy.uix.modalview import ModalView
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 
-from mobile_gui.ui.widgets import MaterialButton, OutlinedButton, hex_to_rgba
+from mobile_gui.ui.widgets import MaterialButton, OutlinedButton, hex_to_rgba, show_toast
 
 
 # ===========================================================================
@@ -1147,3 +1147,546 @@ class ImportResultDialog(BaseDialog):
         self.dismiss()
         if self._on_ok:
             self._on_ok()
+
+
+# ===========================================================================
+# 云盘上传对话框
+# ===========================================================================
+
+class UploadDialog(BaseDialog):
+    """云盘上传对话框。
+
+    流程：选择网盘 → 浏览远程目录 → 上传（进度条+速度）→ 完成后生成分享链接。
+    百度网盘上传前显示风控警告。
+    """
+
+    def __init__(
+        self,
+        file_path: str,
+        file_name: str = "",
+        on_upload_start: Callable[[str, str, str], None] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Args:
+            file_path: 本地文件路径。
+            file_name: 显示文件名。
+            on_upload_start: 上传开始回调 (drive_name, remote_dir, task_id)。
+        """
+        super().__init__(**kwargs)
+        self.size_hint = (0.92, None)
+        self.height = dp(480)
+        self._file_path = file_path
+        self._file_name = file_name or os.path.basename(file_path)
+        self._on_upload_start = on_upload_start
+        self._drive_index = 0
+        self._drive_keys: list[str] = []
+        self._current_dir: str | None = None
+        self._dir_stack: list[str | None] = []
+        self._upload_task_id: str = ""
+        self._stage = "select"  # select / browsing / uploading / done
+
+        self._card = self._make_card(480)
+
+        # 标题
+        title = Label(
+            text="[b]上传到云盘[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(28),
+            font_size=sp(17),
+        )
+        self._card.add_widget(title)
+
+        # 文件信息
+        file_info = Label(
+            text=f"📄 {self._file_name}",
+            font_size=sp(13),
+            halign="left",
+            size_hint_y=None,
+            height=dp(24),
+            color=hex_to_rgba("#757575"),
+        )
+        file_info.bind(size=file_info.setter("text_size"))
+        self._card.add_widget(file_info)
+
+        # -- 网盘选择 --
+        drive_label = Label(
+            text="目标网盘",
+            font_size=sp(13),
+            bold=True,
+            halign="left",
+            size_hint_y=None,
+            height=dp(20),
+        )
+        self._card.add_widget(drive_label)
+
+        drive_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(8),
+        )
+        self._drive_label = Label(
+            text="加载账号...",
+            size_hint_x=0.7,
+            font_size=sp(14),
+            bold=True,
+            halign="left",
+        )
+        self._drive_label.bind(size=self._drive_label.setter("text_size"))
+        self._drive_prev = MaterialButton(
+            text="<", bg_color="#BDBDBD", font_size=sp(16),
+            size_hint_x=0.15, height=dp(36),
+        )
+        self._drive_prev.bind(on_release=self._prev_drive)
+        self._drive_next = MaterialButton(
+            text=">", bg_color="#BDBDBD", font_size=sp(16),
+            size_hint_x=0.15, height=dp(36),
+        )
+        self._drive_next.bind(on_release=self._next_drive)
+        drive_row.add_widget(self._drive_prev)
+        drive_row.add_widget(self._drive_label)
+        drive_row.add_widget(self._drive_next)
+        self._card.add_widget(drive_row)
+
+        # 百度风控警告
+        self._baidu_warn = Label(
+            text="[color=#F44336]⚠️ 百度网盘上传存在风控风险，频繁上传可能导致账号被封[/color]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(11),
+            opacity=0,
+        )
+        self._card.add_widget(self._baidu_warn)
+
+        # -- 远程目录 --
+        dir_label = Label(
+            text="远程目录",
+            font_size=sp(13),
+            bold=True,
+            halign="left",
+            size_hint_y=None,
+            height=dp(20),
+        )
+        self._card.add_widget(dir_label)
+
+        # 目录导航栏
+        nav_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(36),
+            spacing=dp(8),
+        )
+        self._back_btn = MaterialButton(
+            text="← 返回上级",
+            bg_color="#78909C",
+            font_size=sp(12),
+            size_hint_x=0.4,
+            height=dp(32),
+            disabled=True,
+        )
+        self._back_btn.bind(on_release=self._go_parent)
+        self._refresh_btn = MaterialButton(
+            text="🔄 刷新",
+            bg_color="#78909C",
+            font_size=sp(12),
+            size_hint_x=0.3,
+            height=dp(32),
+        )
+        self._refresh_btn.bind(on_release=self._refresh_dirs)
+        self._path_label = Label(
+            text="根目录",
+            font_size=sp(11),
+            color=hex_to_rgba("#757575"),
+            halign="right",
+            size_hint_x=0.3,
+        )
+        nav_row.add_widget(self._back_btn)
+        nav_row.add_widget(self._refresh_btn)
+        nav_row.add_widget(self._path_label)
+        self._card.add_widget(nav_row)
+
+        # 目录列表
+        self._dir_scroll = ScrollView(size_hint=(1, 1))
+        self._dir_list = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(2),
+            padding=dp(4),
+        )
+        self._dir_list.bind(minimum_height=self._dir_list.setter("height"))
+        self._dir_scroll.add_widget(self._dir_list)
+        self._card.add_widget(self._dir_scroll)
+
+        # -- 上传进度区（初始隐藏）--
+        self._progress_box = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(0),
+            spacing=dp(6),
+            opacity=0,
+        )
+        from mobile_gui.ui.widgets import ThemedProgressBar
+        self._upload_progress = ThemedProgressBar(
+            value=0, progress_color="#4CAF50", height=dp(10),
+        )
+        self._upload_info = Label(
+            text="准备上传...",
+            font_size=sp(12),
+            color=hex_to_rgba("#757575"),
+            size_hint_y=None,
+            height=dp(20),
+        )
+        self._progress_box.add_widget(self._upload_progress)
+        self._progress_box.add_widget(self._upload_info)
+        self._card.add_widget(self._progress_box)
+
+        # -- 分享链接区（初始隐藏）--
+        self._share_box = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(0),
+            spacing=dp(6),
+            opacity=0,
+        )
+        self._share_label = Label(
+            text="",
+            font_size=sp(12),
+            color=hex_to_rgba("#4CAF50"),
+            halign="left",
+            size_hint_y=None,
+            height=dp(40),
+        )
+        self._share_label.bind(size=self._share_label.setter("text_size"))
+        self._share_btn = MaterialButton(
+            text="📋 复制分享链接",
+            bg_color="#2196F3",
+            font_size=sp(13),
+            height=dp(36),
+        )
+        self._share_btn.bind(on_release=self._copy_share_link)
+        self._share_box.add_widget(self._share_label)
+        self._share_box.add_widget(self._share_btn)
+        self._card.add_widget(self._share_box)
+
+        # -- 按钮区 --
+        btn_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(44),
+            spacing=dp(12),
+        )
+        self._cancel_btn = MaterialButton(
+            text="取消", bg_color="#9E9E9E", font_size=sp(14),
+        )
+        self._cancel_btn.bind(on_release=lambda *a: self.dismiss())
+        self._upload_btn = MaterialButton(
+            text="⬆️ 开始上传",
+            bg_color="#4CAF50",
+            font_size=sp(14),
+        )
+        self._upload_btn.bind(on_release=self._on_upload_pressed)
+        btn_row.add_widget(self._cancel_btn)
+        btn_row.add_widget(self._upload_btn)
+        self._card.add_widget(btn_row)
+
+        self.add_widget(self._card)
+
+        # 加载已登录账号
+        Clock.schedule_once(lambda dt: self._load_drives(), 0.1)
+
+    def _load_drives(self) -> None:
+        """加载已登录的网盘账号列表。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        drives = app.core.list_credentials()
+        if not drives:
+            self._drive_label.text = "无已登录账号"
+            self._upload_btn.disabled = True
+            return
+        self._drive_keys = drives
+        self._drive_index = 0
+        self._update_drive_display()
+        self._load_dirs()
+
+    def _update_drive_display(self) -> None:
+        """更新当前网盘显示。"""
+        if not self._drive_keys:
+            return
+        drive = self._drive_keys[self._drive_index]
+        from mobile_gui.core_adapter import CoreAdapter
+        info = CoreAdapter.drive_display(drive)
+        self._drive_label.text = f"{info['name']}（已登录）"
+        self._drive_label.color = hex_to_rgba(info["color"])
+        # 百度警告
+        self._baidu_warn.opacity = 1 if drive == "baidu" else 0
+
+    def _prev_drive(self, *args: Any) -> None:
+        if not self._drive_keys:
+            return
+        self._drive_index = (self._drive_index - 1) % len(self._drive_keys)
+        self._update_drive_display()
+        self._current_dir = None
+        self._dir_stack = []
+        self._load_dirs()
+
+    def _next_drive(self, *args: Any) -> None:
+        if not self._drive_keys:
+            return
+        self._drive_index = (self._drive_index + 1) % len(self._drive_keys)
+        self._update_drive_display()
+        self._current_dir = None
+        self._dir_stack = []
+        self._load_dirs()
+
+    def _load_dirs(self) -> None:
+        """加载当前网盘的远程目录列表。"""
+        if not self._drive_keys:
+            return
+        drive = self._drive_keys[self._drive_index]
+        self._path_label.text = "根目录" if self._current_dir is None else "..."
+        self._dir_list.clear_widgets()
+
+        loading = Label(
+            text="加载目录中...",
+            font_size=sp(13),
+            color=hex_to_rgba("#9E9E9E"),
+            size_hint_y=None,
+            height=dp(40),
+        )
+        self._dir_list.add_widget(loading)
+
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.get_remote_dirs(
+            drive_name=drive,
+            parent_dir=self._current_dir,
+            on_success=self._on_dirs_loaded,
+            on_error=self._on_dirs_error,
+        )
+
+    def _on_dirs_loaded(self, dirs: list) -> None:
+        """目录加载成功。"""
+        self._dir_list.clear_widgets()
+
+        # 根目录选项
+        root_btn = self._make_dir_item("📁 根目录（上传到此）", None, is_root=True)
+        self._dir_list.add_widget(root_btn)
+
+        if not dirs:
+            empty = Label(
+                text="（无子目录）",
+                font_size=sp(12),
+                color=hex_to_rgba("#BDBDBD"),
+                size_hint_y=None,
+                height=dp(32),
+            )
+            self._dir_list.add_widget(empty)
+            return
+
+        for d in dirs:
+            dir_name = getattr(d, "dir_name", str(d))
+            dir_id = getattr(d, "dir_id", "")
+            btn = self._make_dir_item(f"📁 {dir_name}", dir_id)
+            self._dir_list.add_widget(btn)
+
+    def _make_dir_item(self, text: str, dir_id: str | None, is_root: bool = False) -> MaterialButton:
+        """创建目录项按钮。"""
+        btn = MaterialButton(
+            text=text,
+            bg_color="#E3F2FD" if is_root else "#F5F5F5",
+            text_color="#1565C0" if is_root else "#424242",
+            font_size=sp(13),
+            height=dp(36),
+        )
+        if is_root:
+            btn.bind(on_release=lambda *a: self._select_dir(None))
+        else:
+            btn.bind(on_release=lambda *a: self._enter_dir(dir_id))
+        return btn
+
+    def _enter_dir(self, dir_id: str | None) -> None:
+        """进入子目录。"""
+        self._dir_stack.append(self._current_dir)
+        self._current_dir = dir_id
+        self._back_btn.disabled = False
+        self._path_label.text = "子目录"
+        self._load_dirs()
+
+    def _go_parent(self, *args: Any) -> None:
+        """返回上级目录。"""
+        if self._dir_stack:
+            self._current_dir = self._dir_stack.pop()
+            self._back_btn.disabled = len(self._dir_stack) == 0
+            self._path_label.text = "根目录" if self._current_dir is None else "子目录"
+            self._load_dirs()
+
+    def _select_dir(self, dir_id: str | None) -> None:
+        """选择上传目标目录。"""
+        self._current_dir = dir_id
+        label = "根目录" if dir_id is None else "已选子目录"
+        self._path_label.text = f"✓ {label}"
+
+    def _refresh_dirs(self, *args: Any) -> None:
+        self._load_dirs()
+
+    def _on_dirs_error(self, error: Exception) -> None:
+        """目录加载失败。"""
+        self._dir_list.clear_widgets()
+        err = Label(
+            text=f"目录加载失败：{error}",
+            font_size=sp(12),
+            color=hex_to_rgba("#F44336"),
+            size_hint_y=None,
+            height=dp(40),
+            halign="center",
+        )
+        self._dir_list.add_widget(err)
+
+    def _on_upload_pressed(self, *args: Any) -> None:
+        """点击开始上传。"""
+        if not self._drive_keys:
+            show_toast(self, "无已登录账号")
+            return
+
+        drive = self._drive_keys[self._drive_index]
+
+        # 百度网盘：风控确认
+        if drive == "baidu":
+            confirmed = self._ask_baidu_confirm()
+            if not confirmed:
+                return
+
+        self._stage = "uploading"
+        self._upload_btn.disabled = True
+        self._upload_btn.text = "上传中..."
+        self._drive_prev.disabled = True
+        self._drive_next.disabled = True
+
+        # 显示进度区
+        self._progress_box.height = dp(60)
+        self._progress_box.opacity = 1
+        self._upload_info.text = "正在初始化上传..."
+
+        from kivy.app import App
+        app = App.get_running_app()
+
+        remote_dir = self._current_dir or ""
+
+        task_id = app.core.upload_to_cloud(
+            file_path=self._file_path,
+            drive_name=drive,
+            remote_dir=remote_dir,
+            on_progress=self._on_upload_progress,
+            on_status=self._on_upload_status,
+            on_error=self._on_upload_error,
+        )
+        self._upload_task_id = task_id
+
+        if self._on_upload_start:
+            self._on_upload_start(drive, remote_dir, task_id)
+
+    def _ask_baidu_confirm(self) -> bool:
+        """百度网盘上传风控确认。"""
+        import threading
+        result_holder: dict[str, bool] = {}
+        event = threading.Event()
+
+        def on_confirm() -> None:
+            result_holder["confirmed"] = True
+            event.set()
+
+        def on_cancel() -> None:
+            result_holder["confirmed"] = False
+            event.set()
+
+        BaiduRiskDialog(on_confirm=on_confirm, on_cancel=on_cancel).open()
+        event.wait(timeout=300)
+        return result_holder.get("confirmed", False)
+
+    def _on_upload_progress(self, task: Any) -> None:
+        """上传进度回调（主线程）。"""
+        self._upload_progress.value = task.percent
+        from mobile_gui.core_adapter import CoreAdapter
+        speed = CoreAdapter.format_speed(task.speed)
+        uploaded = CoreAdapter.format_size(task.uploaded)
+        total = CoreAdapter.format_size(task.total_size)
+        self._upload_info.text = f"{task.percent:.1f}%  {uploaded}/{total}  {speed}"
+
+    def _on_upload_status(self, task: Any) -> None:
+        """上传状态回调（主线程）。"""
+        if task.status == "completed":
+            self._stage = "done"
+            self._upload_progress.value = 100
+            self._upload_info.text = "✅ 上传完成！"
+            self._upload_btn.text = "完成"
+            self._upload_btn.disabled = False
+            self._upload_btn.unbind(on_release=self._on_upload_pressed)
+            self._upload_btn.bind(on_release=lambda *a: self.dismiss())
+
+            # 显示分享链接选项
+            self._share_box.height = dp(90)
+            self._share_box.opacity = 1
+            self._share_label.text = "上传完成，可生成分享链接"
+
+            # 自动尝试生成分享链接
+            if task.result and hasattr(task.result, "file_id"):
+                self._generate_share_link(task.drive, task.result.file_id)
+
+            from kivy.app import App
+            app = App.get_running_app()
+            show_toast(app.root, "上传完成")
+
+        elif task.status == "error":
+            self._upload_info.text = f"❌ 上传失败：{task.error_msg}"
+            self._upload_btn.text = "重试"
+            self._upload_btn.disabled = False
+
+    def _on_upload_error(self, error: Exception) -> None:
+        """上传错误回调。"""
+        self._upload_info.text = f"❌ 上传失败：{error}"
+        self._upload_btn.text = "关闭"
+        self._upload_btn.disabled = False
+        self._upload_btn.unbind(on_release=self._on_upload_pressed)
+        self._upload_btn.bind(on_release=lambda *a: self.dismiss())
+
+    def _generate_share_link(self, drive: str, file_id: str) -> None:
+        """生成分享链接。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        app.core.create_share_link(
+            drive_name=drive,
+            file_id=file_id,
+            on_success=self._on_share_link,
+            on_error=self._on_share_error,
+        )
+
+    def _on_share_link(self, share: Any) -> None:
+        """分享链接生成成功。"""
+        url = getattr(share, "share_url", "")
+        code = getattr(share, "extract_code", "")
+        text = f"🔗 分享链接：{url}"
+        if code:
+            text += f"\n📌 提取码：{code}"
+        self._share_label.text = text
+        self._share_url = url
+
+    def _on_share_error(self, error: Exception) -> None:
+        self._share_label.text = f"分享链接生成失败：{error}"
+
+    def _copy_share_link(self, *args: Any) -> None:
+        """复制分享链接到剪贴板。"""
+        url = getattr(self, "_share_url", "")
+        if url:
+            from kivy.core.clipboard import Clipboard
+            Clipboard.copy(url)
+            show_toast(self, "分享链接已复制")
+        else:
+            show_toast(self, "暂无分享链接")
+
+
+# ===========================================================================
+# 导入结果摘要弹窗
+# ===========================================================================

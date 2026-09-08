@@ -23,6 +23,7 @@ from kivy.uix.scrollview import ScrollView
 from mobile_gui.core_adapter import CoreAdapter
 from mobile_gui.ui.widgets import (
     DownloadTaskCard,
+    UploadTaskCard,
     MaterialButton,
     Theme,
     hex_to_rgba,
@@ -37,6 +38,7 @@ class DownloadScreen(Screen):
         super().__init__(**kwargs)
         self.name = "download"
         self._task_cards: dict[str, DownloadTaskCard] = {}
+        self._upload_cards: dict[str, UploadTaskCard] = {}
         self._refresh_event: Any = None
 
         self._build_ui()
@@ -220,14 +222,57 @@ class DownloadScreen(Screen):
             )
             card.status = task.status
 
+    # ------------------------------------------------------------------
+    # 上传任务管理
+    # ------------------------------------------------------------------
+
+    def add_upload_task_card(self, task_id: str) -> None:
+        """添加一个上传任务卡片。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        task = app.core.get_upload_task(task_id)
+        if not task:
+            return
+
+        if task_id in self._upload_cards:
+            return
+
+        card = UploadTaskCard(
+            task_id=task_id,
+            file_name=task.file_name,
+            drive=task.drive,
+            percent=task.percent,
+            speed_text=CoreAdapter.format_speed(task.speed),
+            size_text=f"{CoreAdapter.format_size(task.uploaded)} / {CoreAdapter.format_size(task.total_size)}",
+            status=task.status,
+        )
+        self._upload_cards[task_id] = card
+        self._task_list.add_widget(card, index=0)  # 上传任务显示在顶部
+        self._task_list.height += card.height + dp(8)
+        self._empty_box.opacity = 0
+
+    def update_upload_task_card(self, task: Any) -> None:
+        """更新上传任务卡片进度。"""
+        card = self._upload_cards.get(task.task_id)
+        if card:
+            card.percent = task.percent
+            card.speed_text = CoreAdapter.format_speed(task.speed)
+            card.size_text = (
+                f"{CoreAdapter.format_size(task.uploaded)} / "
+                f"{CoreAdapter.format_size(task.total_size)}"
+            )
+            card.status = task.status
+
     def refresh_all_tasks(self) -> None:
-        """从核心适配器刷新所有任务状态。"""
+        """从核心适配器刷新所有任务状态（下载+上传）。"""
         from kivy.app import App
         app = App.get_running_app()
         tasks = app.core.get_all_tasks()
+        upload_tasks = app.core.get_all_upload_tasks()
 
-        # 计算总速度
+        # 计算总速度（下载+上传）
         total_speed = sum(t.speed for t in tasks if t.status == "downloading")
+        total_speed += sum(t.speed for t in upload_tasks if t.status == "uploading")
         self._speed_label.text = f"总速 {CoreAdapter.format_speed(total_speed)}"
 
         for task in tasks:
@@ -236,8 +281,14 @@ class DownloadScreen(Screen):
             else:
                 self.update_task_card(task)
 
+        for task in upload_tasks:
+            if task.task_id not in self._upload_cards:
+                self.add_upload_task_card(task.task_id)
+            else:
+                self.update_upload_task_card(task)
+
         # 更新空状态
-        if not tasks:
+        if not tasks and not upload_tasks:
             self._empty_box.opacity = 1
         else:
             self._empty_box.opacity = 0
@@ -263,15 +314,23 @@ class DownloadScreen(Screen):
         show_toast(self, "已恢复所有下载")
 
     def _clear_completed(self, *args: Any) -> None:
-        """清除所有已完成/已取消/出错的任务。"""
+        """清除所有已完成/已取消/出错的任务（下载+上传）。"""
         from kivy.app import App
         app = App.get_running_app()
         tasks = app.core.get_all_tasks()
+        upload_tasks = app.core.get_all_upload_tasks()
         removed = 0
         for task in tasks:
             if task.status in ("completed", "canceled", "error"):
                 app.core.remove_task(task.task_id)
                 card = self._task_cards.pop(task.task_id, None)
+                if card and card.parent:
+                    card.parent.remove_widget(card)
+                removed += 1
+        for task in upload_tasks:
+            if task.status in ("completed", "canceled", "error"):
+                app.core.remove_upload_task(task.task_id)
+                card = self._upload_cards.pop(task.task_id, None)
                 if card and card.parent:
                     card.parent.remove_widget(card)
                 removed += 1

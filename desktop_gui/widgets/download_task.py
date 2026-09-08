@@ -13,7 +13,7 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
-from typing import Callable
+from typing import Any, Callable
 
 from core.downloader.engine import DownloadEngine
 from core.downloader.progress import DownloadProgress
@@ -54,6 +54,10 @@ class DownloadTaskWidget(ttk.Frame):
         concurrency: int,
         on_status_change: Callable[["DownloadTaskWidget", str], None] | None = None,
         on_remove: Callable[["DownloadTaskWidget"], None] | None = None,
+        headers: dict[str, str] | None = None,
+        post_download_hook: Callable[[str], None] | None = None,
+        on_upload: Callable[["DownloadTaskWidget"], None] | None = None,
+        task_type: str = "download",
     ) -> None:
         """初始化下载任务组件。
 
@@ -66,6 +70,10 @@ class DownloadTaskWidget(ttk.Frame):
             concurrency: 并发数（1-32）。
             on_status_change: 状态变化回调 (widget, new_status)。
             on_remove: 任务移除回调 (widget)。
+            headers: 下载请求头（如 Referer / Cookie）。
+            post_download_hook: 下载完成后回调 (output_path)，用于 ID3 标签嵌入等。
+            on_upload: 上传到云盘按钮回调 (widget)，仅已完成任务显示。
+            task_type: 任务类型标识（"download" / "video" / "music"），用于图标区分。
         """
         super().__init__(master, padding=4, relief=tk.GROOVE, borderwidth=1)
 
@@ -76,6 +84,10 @@ class DownloadTaskWidget(ttk.Frame):
         self._concurrency = concurrency
         self._on_status_change = on_status_change
         self._on_remove = on_remove
+        self._headers = headers
+        self._post_download_hook = post_download_hook
+        self._on_upload = on_upload
+        self._task_type = task_type
 
         # 状态
         self._status = STATUS_PENDING
@@ -96,12 +108,16 @@ class DownloadTaskWidget(ttk.Frame):
 
     def _build_ui(self) -> None:
         """构建 UI 布局。"""
+        # 任务类型图标前缀
+        type_icons = {"download": "📄", "video": "🎬", "music": "🎵"}
+        type_icon = type_icons.get(self._task_type, "📄")
+
         # 第一行：文件名 + 状态 + 移除按钮
         row1 = ttk.Frame(self)
         row1.pack(fill=tk.X)
 
         self._name_label = ttk.Label(
-            row1, text=self._file_name, font=("", 10, "bold"), anchor=tk.W
+            row1, text=f"{type_icon} {self._file_name}", font=("", 10, "bold"), anchor=tk.W
         )
         self._name_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -159,7 +175,15 @@ class DownloadTaskWidget(ttk.Frame):
             btn_frame, text="打开位置", command=self._handle_open_location,
             state=tk.DISABLED,
         )
-        self._open_btn.pack(side=tk.LEFT)
+        self._open_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        # 上传到云盘按钮（仅已完成时显示，需提供回调）
+        self._upload_btn = ttk.Button(
+            btn_frame, text="☁ 上传云盘", command=self._handle_upload,
+            state=tk.DISABLED,
+        )
+        if self._on_upload is not None:
+            self._upload_btn.pack(side=tk.LEFT)
 
     # ---------- 公共方法 ----------
 
@@ -250,11 +274,20 @@ class DownloadTaskWidget(ttk.Frame):
         """
         try:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            engine.download(
-                url=url,
-                output_path=output_path,
-                progress_callback=self._progress_callback,
-            )
+            download_kwargs: dict[str, Any] = {
+                "url": url,
+                "output_path": output_path,
+                "progress_callback": self._progress_callback,
+            }
+            if self._headers:
+                download_kwargs["headers"] = self._headers
+            engine.download(**download_kwargs)
+            # 下载完成后执行后置钩子（如 ID3 标签嵌入）
+            if self._post_download_hook:
+                try:
+                    self._post_download_hook(output_path)
+                except Exception:
+                    pass  # 后置钩子失败不影响下载状态
             # 下载完成
             self._set_status_async(STATUS_COMPLETED)
         except DownloadError as exc:
@@ -333,6 +366,8 @@ class DownloadTaskWidget(ttk.Frame):
             self._resume_btn.config(state=tk.DISABLED)
             self._cancel_btn.config(state=tk.DISABLED)
             self._open_btn.config(state=tk.NORMAL)
+            if self._on_upload is not None:
+                self._upload_btn.config(state=tk.NORMAL)
             self._status_label.config(text=STATUS_COMPLETED, foreground="#2E7D32")
             self._speed_label.config(text="完成")
             self._progress["value"] = 100
@@ -342,6 +377,8 @@ class DownloadTaskWidget(ttk.Frame):
             self._resume_btn.config(state=tk.DISABLED)
             self._cancel_btn.config(state=tk.DISABLED)
             self._open_btn.config(state=tk.DISABLED)
+            if self._on_upload is not None:
+                self._upload_btn.config(state=tk.DISABLED)
             color = "#C62828" if self._status == STATUS_ERROR else "#666"
             self._status_label.config(text=self._status, foreground=color)
             self._speed_label.config(text="—")
@@ -405,3 +442,8 @@ class DownloadTaskWidget(ttk.Frame):
                 subprocess.Popen(["xdg-open", output_dir])
         except Exception:
             pass  # 静默失败
+
+    def _handle_upload(self) -> None:
+        """处理上传到云盘按钮点击。"""
+        if self._on_upload and self._status == STATUS_COMPLETED:
+            self._on_upload(self)

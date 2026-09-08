@@ -13,7 +13,7 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
 from core import (
     AuthenticationError,
@@ -38,9 +38,16 @@ from .dialogs.settings import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_CLIPBOARD_MONITOR,
     DEFAULT_CONCURRENCY,
+    DEFAULT_MUSIC_DOWNLOAD_COVER,
+    DEFAULT_MUSIC_EMBED_ID3,
+    DEFAULT_MUSIC_OUTPUT_DIR,
+    DEFAULT_MUSIC_QUALITY,
     DEFAULT_SAVE_PATH,
     DEFAULT_SOUND_NOTIFY,
+    DEFAULT_VIDEO_OUTPUT_DIR,
+    DEFAULT_VIDEO_QUALITY,
 )
+from .dialogs.upload_dialog import UploadDialog
 from .pages.account_page import AccountPage
 from .pages.download_page import DownloadPage
 from .pages.parse_page import ParsePage
@@ -86,6 +93,16 @@ class YunXApp(tk.Tk):
         self._clipboard_monitor = DEFAULT_CLIPBOARD_MONITOR
         self._sound_notify = DEFAULT_SOUND_NOTIFY
         self._theme = "light"
+
+        # 视频下载设置
+        self._video_quality = DEFAULT_VIDEO_QUALITY
+        self._video_output_dir = DEFAULT_VIDEO_OUTPUT_DIR
+
+        # 音乐下载设置
+        self._music_quality = DEFAULT_MUSIC_QUALITY
+        self._music_output_dir = DEFAULT_MUSIC_OUTPUT_DIR
+        self._music_embed_id3 = DEFAULT_MUSIC_EMBED_ID3
+        self._music_download_cover = DEFAULT_MUSIC_DOWNLOAD_COVER
 
         # 解析结果缓存
         self._current_share_infos: list[ShareInfo] = []
@@ -176,11 +193,16 @@ class YunXApp(tk.Tk):
             self._notebook,
             on_parse=self._on_parse,
             on_download=self._on_start_downloads,
+            on_add_task=self._on_add_download_task,
+            get_config=lambda: self._config,
         )
         self._notebook.add(self._parse_page, text="  🔍 解析  ")
 
         # ---- 下载管理页 ----
-        self._download_page = DownloadPage(self._notebook)
+        self._download_page = DownloadPage(
+            self._notebook,
+            on_upload=self._on_upload_task,
+        )
         self._notebook.add(self._download_page, text="  📥 下载管理  ")
 
         # ---- 账号管理页 ----
@@ -263,11 +285,33 @@ class YunXApp(tk.Tk):
             self._theme = self._config.get("theme", "light")
             settings["theme"] = self._theme
 
+            # 视频设置
+            self._video_quality = self._config.get("video_quality", DEFAULT_VIDEO_QUALITY)
+            settings["video_quality"] = self._video_quality
+            self._video_output_dir = self._config.get("video_output_dir", DEFAULT_VIDEO_OUTPUT_DIR)
+            settings["video_output_dir"] = self._video_output_dir
+
+            # 音乐设置
+            self._music_quality = self._config.get("music_quality", DEFAULT_MUSIC_QUALITY)
+            settings["music_quality"] = self._music_quality
+            self._music_output_dir = self._config.get("music_output_dir", DEFAULT_MUSIC_OUTPUT_DIR)
+            settings["music_output_dir"] = self._music_output_dir
+            self._music_embed_id3 = bool(self._config.get("music_embed_id3", DEFAULT_MUSIC_EMBED_ID3))
+            settings["music_embed_id3"] = self._music_embed_id3
+            self._music_download_cover = bool(self._config.get("music_download_cover", DEFAULT_MUSIC_DOWNLOAD_COVER))
+            settings["music_download_cover"] = self._music_download_cover
+
             # 更新各页面
             self._parse_page.update_settings(
                 save_path=self._save_path,
                 concurrency=self._concurrency,
                 chunk_size=self._chunk_size,
+                video_output_dir=self._video_output_dir,
+                video_default_quality=self._video_quality,
+                music_output_dir=self._music_output_dir,
+                music_default_quality=self._music_quality,
+                music_embed_id3=self._music_embed_id3,
+                music_download_cover=self._music_download_cover,
             )
             self._settings_page.load_settings(settings)
 
@@ -293,11 +337,25 @@ class YunXApp(tk.Tk):
         self._sound_notify = settings.get("sound_notify", self._sound_notify)
         self._theme = settings.get("theme", self._theme)
 
+        # 视频/音乐设置
+        self._video_quality = settings.get("video_quality", self._video_quality)
+        self._video_output_dir = settings.get("video_output_dir", self._video_output_dir)
+        self._music_quality = settings.get("music_quality", self._music_quality)
+        self._music_output_dir = settings.get("music_output_dir", self._music_output_dir)
+        self._music_embed_id3 = settings.get("music_embed_id3", self._music_embed_id3)
+        self._music_download_cover = settings.get("music_download_cover", self._music_download_cover)
+
         # 同步到解析页
         self._parse_page.update_settings(
             save_path=self._save_path,
             concurrency=self._concurrency,
             chunk_size=self._chunk_size,
+            video_output_dir=self._video_output_dir,
+            video_default_quality=self._video_quality,
+            music_output_dir=self._music_output_dir,
+            music_default_quality=self._music_quality,
+            music_embed_id3=self._music_embed_id3,
+            music_download_cover=self._music_download_cover,
         )
 
         # 同步剪贴板监听
@@ -478,6 +536,92 @@ class YunXApp(tk.Tk):
             self._status_bar.set_status(f"已启动 {started} 个下载任务")
             # 自动切换到下载管理页
             self._notebook.select(1)
+
+    def _on_add_download_task(
+        self,
+        file_name: str,
+        url: str,
+        output_dir: str,
+        chunk_size: int,
+        concurrency: int,
+        headers: dict[str, str] | None = None,
+        post_download_hook: Callable[[str], None] | None = None,
+        task_type: str = "download",
+    ) -> None:
+        """添加视频/音乐下载任务（由解析页回调）。
+
+        Args:
+            file_name: 文件名。
+            url: 下载直链。
+            output_dir: 保存目录。
+            chunk_size: 分片大小。
+            concurrency: 并发数。
+            headers: 下载请求头。
+            post_download_hook: 下载完成后回调（如 ID3 标签嵌入）。
+            task_type: 任务类型（download/video/music）。
+        """
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("错误", f"无法创建下载目录：{exc}", parent=self)
+            return
+
+        task = self._download_page.create_task(
+            file_name=file_name,
+            url=url,
+            output_dir=output_dir,
+            chunk_size=chunk_size,
+            concurrency=concurrency,
+            on_status_change=self._on_task_status_change,
+            on_remove=self._on_task_remove,
+            headers=headers,
+            post_download_hook=post_download_hook,
+            task_type=task_type,
+        )
+        self._download_tasks.append(task)
+        task.start()
+        self._status_bar.set_status(f"已开始下载：{file_name}")
+        # 自动切换到下载管理页
+        self._notebook.select(1)
+
+    def _on_upload_task(self, task: DownloadTaskWidget) -> None:
+        """处理下载任务的「上传到云盘」按钮。
+
+        Args:
+            task: 已完成的下载任务组件。
+        """
+        file_path = task.output_path
+        if not os.path.exists(file_path):
+            messagebox.showerror("错误", f"文件不存在：{file_path}", parent=self)
+            return
+
+        if self._config is None:
+            messagebox.showinfo(
+                "提示",
+                "请先在「账号管理」页解锁配置并添加网盘账号",
+                parent=self,
+            )
+            self._notebook.select(2)
+            return
+
+        # 打开上传对话框
+        dialog = UploadDialog(
+            self,
+            file_path=file_path,
+            config=self._config,
+            on_upload_start=self._on_upload_started,
+        )
+        # 非模态，允许用户继续操作
+
+    def _on_upload_started(self, file_path: str, drive: str) -> None:
+        """上传开始回调：在下载管理页添加上传任务卡片。
+
+        Args:
+            file_path: 本地文件路径。
+            drive: 目标网盘标识。
+        """
+        self._download_page.add_upload_task(file_path, drive)
+        self._notebook.select(1)
 
     def _on_task_status_change(
         self, task: DownloadTaskWidget, status: str

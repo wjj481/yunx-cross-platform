@@ -5,5 +5,5 @@ YunX 桌面端 GUI（tkinter）。
 本包不得被核心引擎（``core``）导入，保持单向依赖。
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __app_name__ = "YunX 云析"

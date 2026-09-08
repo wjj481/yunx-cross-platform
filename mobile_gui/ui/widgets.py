@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from kivy.animation import Animation
@@ -770,6 +771,14 @@ class DownloadTaskCard(CardWidget):
             height=dp(32),
         )
         self.cancel_btn.bind(on_release=self._on_cancel)
+        self.upload_btn = MaterialButton(
+            text="☁️ 上传",
+            bg_color="#2196F3",
+            font_size=sp(13),
+            height=dp(32),
+            disabled=True,
+        )
+        self.upload_btn.bind(on_release=self._on_upload)
         self.delete_btn = MaterialButton(
             text="删除",
             bg_color="#9E9E9E",
@@ -780,6 +789,7 @@ class DownloadTaskCard(CardWidget):
         self.delete_btn.bind(on_release=self._on_delete)
         btn_row.add_widget(self.pause_btn)
         btn_row.add_widget(self.cancel_btn)
+        btn_row.add_widget(self.upload_btn)
         btn_row.add_widget(self.delete_btn)
         self.add_widget(btn_row)
 
@@ -814,16 +824,19 @@ class DownloadTaskCard(CardWidget):
             self.pause_btn.bg_color = "#FF9800"
             self.pause_btn.disabled = False
             self.cancel_btn.disabled = False
+            self.upload_btn.disabled = True
             self.delete_btn.disabled = True
         elif self.status == "paused":
             self.pause_btn.text = "恢复"
             self.pause_btn.bg_color = "#4CAF50"
             self.pause_btn.disabled = False
             self.cancel_btn.disabled = False
+            self.upload_btn.disabled = True
             self.delete_btn.disabled = True
         elif self.status in ("completed", "error", "canceled"):
             self.pause_btn.disabled = True
             self.cancel_btn.disabled = True
+            self.upload_btn.disabled = (self.status != "completed")
             self.delete_btn.disabled = False
 
     def _on_pause(self, instance: Any) -> None:
@@ -854,13 +867,234 @@ class DownloadTaskCard(CardWidget):
                 parent.remove_widget(self)
             # 通知下载屏幕刷新
             if hasattr(app, 'root') and app.root:
-                # 通过 ScreenManager 找到 download screen
                 sm = app.root if hasattr(app.root, 'get_screen') else None
                 if sm and sm.has_screen("download"):
                     sm.get_screen("download")._task_cards.pop(self.task_id, None)
 
+    def _on_upload(self, instance: Any) -> None:
+        """上传已完成的文件到云盘。"""
+        app = self.get_app_instance()
+        if not app or not self.task_id:
+            return
+        task = app.core.get_task(self.task_id)
+        if not task or task.status != "completed":
+            show_toast(self, "任务未完成，无法上传")
+            return
+
+        file_path = task.output_path
+        if not file_path or not os.path.exists(file_path):
+            show_toast(self, "文件不存在，无法上传")
+            return
+
+        from mobile_gui.ui.dialogs import UploadDialog
+        dialog = UploadDialog(
+            file_path=file_path,
+            file_name=task.file_name,
+            on_upload_start=self._on_upload_started,
+        )
+        dialog.open()
+
+    def _on_upload_started(self, drive_name: str, remote_dir: str, task_id: str) -> None:
+        """上传任务已启动回调。"""
+        app = self.get_app_instance()
+        if app:
+            download_screen = app.get_screen("download")
+            if download_screen:
+                download_screen.add_upload_task_card(task_id)
+
     def get_app_instance(self) -> Any:
         """获取 App 实例（通过 Window 遍历）。"""
+        from kivy.app import App
+        return App.get_running_app()
+
+
+# ===========================================================================
+# 上传任务卡片
+# ===========================================================================
+
+class UploadTaskCard(CardWidget):
+    """上传任务卡片。
+
+    显示文件名、目标网盘、进度条、百分比、速度、状态，以及取消/删除按钮。
+    用绿色进度条和 ☁️ 图标区分于下载任务。
+    """
+
+    task_id = StringProperty("")
+    file_name = StringProperty("")
+    drive = StringProperty("")
+    percent = NumericProperty(0)
+    speed_text = StringProperty("0 B/s")
+    size_text = StringProperty("0 / 0 B")
+    status = StringProperty("waiting")
+
+    STATUS_TEXT = {
+        "waiting": "等待中",
+        "uploading": "上传中",
+        "completed": "已完成",
+        "error": "错误",
+        "canceled": "已取消",
+    }
+    STATUS_COLOR = {
+        "waiting": "#9E9E9E",
+        "uploading": "#4CAF50",
+        "completed": "#2196F3",
+        "error": "#F44336",
+        "canceled": "#9E9E9E",
+    }
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.size_hint_y = None
+        self.height = dp(130)
+
+        # 第一行：文件名 + 状态
+        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(24))
+        self.name_label = Label(
+            text=f"☁️ {self.file_name}",
+            font_size=sp(14),
+            bold=True,
+            halign="left",
+            valign="middle",
+            shorten=True,
+            shorten_from="right",
+        )
+        self.name_label.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+        self.status_label = Label(
+            text=self.STATUS_TEXT.get(self.status, self.status),
+            size_hint=(None, None),
+            size=(dp(60), dp(24)),
+            font_size=sp(12),
+            bold=True,
+            color=hex_to_rgba(self.STATUS_COLOR.get(self.status, "#9E9E9E")),
+        )
+        header.add_widget(self.name_label)
+        header.add_widget(self.status_label)
+        self.add_widget(header)
+
+        # 网盘标签
+        self.drive_label = Label(
+            text="",
+            font_size=sp(11),
+            color=hex_to_rgba("#757575"),
+            halign="left",
+            size_hint_y=None,
+            height=dp(16),
+        )
+        self.add_widget(self.drive_label)
+
+        # 进度条 + 百分比
+        progress_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(28), spacing=dp(8))
+        self.progress_bar = ThemedProgressBar(
+            value=self.percent,
+            progress_color="#4CAF50",
+            size_hint_y=None,
+            height=dp(10),
+        )
+        self.percent_label = Label(
+            text=f"{self.percent:.1f}%",
+            size_hint=(None, None),
+            size=(dp(56), dp(28)),
+            font_size=sp(13),
+            bold=True,
+        )
+        progress_row.add_widget(self.progress_bar)
+        progress_row.add_widget(self.percent_label)
+        self.add_widget(progress_row)
+
+        # 速度 + 大小
+        info_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(20))
+        self.speed_label = Label(
+            text=self.speed_text,
+            font_size=sp(12),
+            color=hex_to_rgba("#757575"),
+            halign="left",
+        )
+        self.size_label = Label(
+            text=self.size_text,
+            font_size=sp(12),
+            color=hex_to_rgba("#757575"),
+            halign="right",
+        )
+        info_row.add_widget(self.speed_label)
+        info_row.add_widget(self.size_label)
+        self.add_widget(info_row)
+
+        # 控制按钮
+        btn_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(32), spacing=dp(8))
+        self.cancel_btn = MaterialButton(
+            text="取消",
+            bg_color="#F44336",
+            font_size=sp(12),
+            height=dp(28),
+        )
+        self.cancel_btn.bind(on_release=self._on_cancel)
+        self.delete_btn = MaterialButton(
+            text="删除",
+            bg_color="#9E9E9E",
+            font_size=sp(12),
+            height=dp(28),
+            disabled=True,
+        )
+        self.delete_btn.bind(on_release=self._on_delete)
+        btn_row.add_widget(self.cancel_btn)
+        btn_row.add_widget(self.delete_btn)
+        self.add_widget(btn_row)
+
+        self.bind(
+            file_name=self._update_name,
+            drive=self._update_drive,
+            percent=self._update_progress,
+            speed_text=self._update_speed,
+            size_text=self._update_size,
+            status=self._update_status,
+        )
+
+    def _update_name(self, *args: Any) -> None:
+        self.name_label.text = f"☁️ {self.file_name}"
+
+    def _update_drive(self, *args: Any) -> None:
+        from mobile_gui.core_adapter import CoreAdapter
+        info = CoreAdapter.drive_display(self.drive)
+        self.drive_label.text = f"目标：{info['name']}"
+
+    def _update_progress(self, *args: Any) -> None:
+        self.progress_bar.value = self.percent
+        self.percent_label.text = f"{self.percent:.1f}%"
+
+    def _update_speed(self, *args: Any) -> None:
+        self.speed_label.text = self.speed_text
+
+    def _update_size(self, *args: Any) -> None:
+        self.size_label.text = self.size_text
+
+    def _update_status(self, *args: Any) -> None:
+        self.status_label.text = self.STATUS_TEXT.get(self.status, self.status)
+        self.status_label.color = hex_to_rgba(self.STATUS_COLOR.get(self.status, "#9E9E9E"))
+        if self.status == "uploading":
+            self.cancel_btn.disabled = False
+            self.delete_btn.disabled = True
+        elif self.status in ("completed", "error", "canceled"):
+            self.cancel_btn.disabled = True
+            self.delete_btn.disabled = False
+
+    def _on_cancel(self, instance: Any) -> None:
+        app = self.get_app_instance()
+        if app and self.task_id:
+            app.core.cancel_upload_task(self.task_id)
+
+    def _on_delete(self, instance: Any) -> None:
+        app = self.get_app_instance()
+        if app and self.task_id:
+            app.core.remove_upload_task(self.task_id)
+            parent = self.parent
+            if parent:
+                parent.remove_widget(self)
+            if hasattr(app, 'root') and app.root:
+                sm = app.root if hasattr(app.root, 'get_screen') else None
+                if sm and sm.has_screen("download"):
+                    sm.get_screen("download")._upload_cards.pop(self.task_id, None)
+
+    def get_app_instance(self) -> Any:
         from kivy.app import App
         return App.get_running_app()
 
