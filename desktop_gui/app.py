@@ -1,8 +1,9 @@
 """
-YunX 桌面端主应用类。
+YunX 桌面端主应用类（Material 3 标签页布局）。
 
-整合所有 UI 组件，管理解析/下载线程，处理菜单事件和设置。
-所有耗时操作（解析、下载）在子线程中运行，通过 root.after() 更新 UI。
+整合解析页、下载管理页、账号管理页、设置页四个标签页，
+管理解析/下载线程、菜单事件、剪贴板监听和主题切换。
+所有耗时操作在子线程中运行，通过 root.after() 更新 UI。
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import os
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
 from core import (
@@ -21,41 +22,46 @@ from core import (
     NetworkError,
     ParserError,
     YunXError,
+    export_config,
+    import_config,
+    is_encrypted,
+    apply_imported_config,
 )
 from core.config import ConfigManager
 from core.parsers.base import ShareInfo, get_parser
 from core.clipboard import detect_share_url
 
 from . import __app_name__, __version__
-from .dialogs.account_manager import AccountManagerDialog
 from .dialogs.baidu_warning import BaiduWarningDialog
+from .dialogs.config_export import ExportConfigDialog, ImportConfigDialog
 from .dialogs.settings import (
     DEFAULT_CHUNK_SIZE,
+    DEFAULT_CLIPBOARD_MONITOR,
     DEFAULT_CONCURRENCY,
     DEFAULT_SAVE_PATH,
-    CHUNK_SIZE_OPTIONS,
-    SettingsDialog,
+    DEFAULT_SOUND_NOTIFY,
 )
-from .utils import (
-    format_size,
-    get_drive_color,
-    get_drive_display,
-    needs_risk_warning,
-)
+from .pages.account_page import AccountPage
+from .pages.download_page import DownloadPage
+from .pages.parse_page import ParsePage
+from .pages.settings_page import SettingsPage
+from .theme import ThemeManager
+from .utils import format_size, get_drive_display, needs_risk_warning
 from .widgets.download_task import (
     STATUS_COMPLETED,
     DownloadTaskWidget,
 )
-from .widgets.file_list import FileListWidget
 from .widgets.status_bar import StatusBarWidget
-from .widgets.url_input import URLInputWidget
 
 
 class YunXApp(tk.Tk):
-    """YunX 桌面端主应用。
+    """YunX 桌面端主应用（Notebook 标签页布局）。
 
-    整合 URL 输入、文件列表、下载控制、下载任务管理、状态栏和菜单栏。
-    解析和下载均在子线程中执行，不阻塞 UI。
+    四个标签页：
+    - 解析页：URL 输入 + 文件列表 + 下载操作
+    - 下载管理页：任务卡片列表 + 批量操作
+    - 账号管理页：网盘账号卡片 + 添加/删除/测试
+    - 设置页：下载设置 + 外观 + 配置管理 + 关于
     """
 
     def __init__(self) -> None:
@@ -64,8 +70,11 @@ class YunXApp(tk.Tk):
 
         # 窗口基本设置
         self.title(f"{__app_name__} - 全平台网盘解析下载器 v{__version__}")
-        self.geometry("960x720")
-        self.minsize(900, 650)
+        self.geometry("1000x760")
+        self.minsize(900, 680)
+
+        # 主题管理器
+        self._theme_manager = ThemeManager(self)
 
         # 配置管理器（延迟初始化，需要主密码解锁）
         self._config: ConfigManager | None = None
@@ -74,9 +83,9 @@ class YunXApp(tk.Tk):
         self._save_path = DEFAULT_SAVE_PATH
         self._concurrency = DEFAULT_CONCURRENCY
         self._chunk_size = DEFAULT_CHUNK_SIZE
-        self._clipboard_monitor = False
-        self._sound_notify = True
-        self._theme = "浅色"
+        self._clipboard_monitor = DEFAULT_CLIPBOARD_MONITOR
+        self._sound_notify = DEFAULT_SOUND_NOTIFY
+        self._theme = "light"
 
         # 解析结果缓存
         self._current_share_infos: list[ShareInfo] = []
@@ -90,55 +99,24 @@ class YunXApp(tk.Tk):
         self._clipboard_polling = False
 
         # 构建 UI
-        # 菜单栏在某些虚拟帧缓冲（Xvfb）环境下可能因 XCB 问题崩溃，
-        # 真实桌面环境不受影响；此处容错降级，无菜单时应用仍可运行。
         try:
             self._build_menu()
         except Exception:
             pass
         self._build_ui()
-        self._configure_styles()
 
-        # 尝试自动加载设置（如果配置文件存在且无需密码）
+        # 尝试自动加载设置
         self._try_load_settings()
 
         # 确保默认下载目录存在
         os.makedirs(self._save_path, exist_ok=True)
 
+        # 启动总速度轮询
+        self._schedule_speed_update()
+
     # ==================================================================
     # UI 构建
     # ==================================================================
-
-    def _configure_styles(self) -> None:
-        """配置 ttk 样式。"""
-        style = ttk.Style(self)
-        # 使用系统默认主题
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        # 进度条颜色样式（通过 ttk 样式近似实现）
-        style.configure(
-            "Download.Horizontal.TProgressbar",
-            troughcolor="#E0E0E0",
-            background="#1E88E5",
-        )
-        style.configure(
-            "Paused.Horizontal.TProgressbar",
-            troughcolor="#E0E0E0",
-            background="#F9A825",
-        )
-        style.configure(
-            "Completed.Horizontal.TProgressbar",
-            troughcolor="#E0E0E0",
-            background="#43A047",
-        )
-        style.configure(
-            "Error.Horizontal.TProgressbar",
-            troughcolor="#E0E0E0",
-            background="#E53935",
-        )
 
     def _build_menu(self) -> None:
         """构建菜单栏。"""
@@ -146,6 +124,9 @@ class YunXApp(tk.Tk):
 
         # 文件菜单
         file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="导出配置...", command=self._menu_export_config)
+        file_menu.add_command(label="导入配置...", command=self._menu_import_config)
+        file_menu.add_separator()
         file_menu.add_command(label="设置保存路径...", command=self._menu_set_save_path)
         file_menu.add_separator()
         file_menu.add_command(label="退出", command=self._on_quit)
@@ -153,7 +134,7 @@ class YunXApp(tk.Tk):
 
         # 工具菜单
         tools_menu = tk.Menu(menubar, tearoff=0)
-        self._clipboard_monitor_var = tk.BooleanVar(value=False)
+        self._clipboard_monitor_var = tk.BooleanVar(value=self._clipboard_monitor)
         tools_menu.add_checkbutton(
             label="剪贴板监听",
             variable=self._clipboard_monitor_var,
@@ -165,7 +146,9 @@ class YunXApp(tk.Tk):
 
         # 账号菜单
         account_menu = tk.Menu(menubar, tearoff=0)
-        account_menu.add_command(label="管理网盘账号...", command=self._menu_account_manager)
+        account_menu.add_command(
+            label="管理网盘账号", command=lambda: self._notebook.select(2)
+        )
         menubar.add_cascade(label="账号", menu=account_menu)
 
         # 帮助菜单
@@ -173,146 +156,167 @@ class YunXApp(tk.Tk):
         help_menu.add_command(label="使用说明", command=self._menu_help)
         help_menu.add_command(label="关于", command=self._menu_about)
         help_menu.add_command(label="免责声明", command=self._menu_disclaimer)
+        help_menu.add_command(label="GitHub", command=self._menu_github)
         menubar.add_cascade(label="帮助", menu=help_menu)
 
         self.config(menu=menubar)
 
     def _build_ui(self) -> None:
-        """构建主界面布局。"""
+        """构建主界面布局（Notebook 标签页）。"""
         # 主容器
-        main = ttk.Frame(self, padding=8)
+        main = ttk.Frame(self, padding=4)
         main.pack(fill=tk.BOTH, expand=True)
 
-        # ---- 顶部标题栏 ----
-        header = ttk.Frame(main)
-        header.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(
-            header,
-            text=f"{__app_name__}",
-            font=("", 16, "bold"),
-            foreground="#1565C0",
-        ).pack(side=tk.LEFT)
-        ttk.Label(
-            header,
-            text=f"  v{__version__}  |  全平台网盘解析下载器",
-            font=("", 10),
-            foreground="#666",
-        ).pack(side=tk.LEFT, pady=(6, 0))
+        # Notebook 标签页
+        self._notebook = ttk.Notebook(main)
+        self._notebook.pack(fill=tk.BOTH, expand=True)
 
-        # ---- URL 输入区 ----
-        self._url_input = URLInputWidget(main, on_parse=self._on_parse)
-        self._url_input.pack(fill=tk.X, pady=(0, 8))
-
-        # ---- 文件列表区 ----
-        self._file_list = FileListWidget(main)
-        self._file_list.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-
-        # ---- 下载控制区 ----
-        control_frame = ttk.LabelFrame(main, text="下载控制", padding=8)
-        control_frame.pack(fill=tk.X, pady=(0, 8))
-
-        # 第一行：下载按钮
-        btn_row = ttk.Frame(control_frame)
-        btn_row.pack(fill=tk.X, pady=(0, 6))
-
-        self._download_selected_btn = ttk.Button(
-            btn_row, text="下载选中", command=self._on_download_selected
+        # ---- 解析页 ----
+        self._parse_page = ParsePage(
+            self._notebook,
+            on_parse=self._on_parse,
+            on_download=self._on_start_downloads,
         )
-        self._download_selected_btn.pack(side=tk.LEFT)
+        self._notebook.add(self._parse_page, text="  🔍 解析  ")
 
-        self._download_all_btn = ttk.Button(
-            btn_row, text="全部下载", command=self._on_download_all
-        )
-        self._download_all_btn.pack(side=tk.LEFT, padx=(6, 0))
+        # ---- 下载管理页 ----
+        self._download_page = DownloadPage(self._notebook)
+        self._notebook.add(self._download_page, text="  📥 下载管理  ")
 
-        # 保存路径
-        path_row = ttk.Frame(btn_row)
-        path_row.pack(side=tk.LEFT, padx=(16, 0), fill=tk.X, expand=True)
-        ttk.Label(path_row, text="保存到：").pack(side=tk.LEFT)
-        self._save_path_var = tk.StringVar(value=self._save_path)
-        ttk.Entry(path_row, textvariable=self._save_path_var).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4)
+        # ---- 账号管理页 ----
+        self._account_page = AccountPage(
+            self._notebook,
+            get_config=lambda: self._config,
+            on_config_unlocked=self._on_config_unlocked,
         )
-        ttk.Button(path_row, text="...", width=3, command=self._browse_save_path).pack(
-            side=tk.LEFT
-        )
+        self._notebook.add(self._account_page, text="  👤 账号管理  ")
 
-        # 第二行：并发数 + 分片大小
-        opt_row = ttk.Frame(control_frame)
-        opt_row.pack(fill=tk.X)
-
-        ttk.Label(opt_row, text="并发数：").pack(side=tk.LEFT)
-        self._concurrency_var = tk.IntVar(value=self._concurrency)
-        self._concurrency_scale = ttk.Scale(
-            opt_row,
-            from_=1,
-            to=32,
-            orient=tk.HORIZONTAL,
-            variable=self._concurrency_var,
-            length=120,
-            command=self._on_concurrency_change,
+        # ---- 设置页 ----
+        self._settings_page = SettingsPage(
+            self._notebook,
+            get_config=lambda: self._config,
+            on_settings_change=self._on_settings_change,
+            on_theme_change=self._on_theme_change,
+            on_config_imported=self._on_config_imported,
         )
-        self._concurrency_scale.pack(side=tk.LEFT)
-        self._concurrency_label = ttk.Label(
-            opt_row, text=f"{self._concurrency}", width=4
-        )
-        self._concurrency_label.pack(side=tk.LEFT, padx=(4, 16))
-
-        ttk.Label(opt_row, text="分片大小：").pack(side=tk.LEFT)
-        self._chunk_var = tk.StringVar()
-        self._chunk_combo = ttk.Combobox(
-            opt_row,
-            textvariable=self._chunk_var,
-            values=list(CHUNK_SIZE_OPTIONS.keys()),
-            state="readonly",
-            width=8,
-        )
-        # 设置默认值
-        for name, size in CHUNK_SIZE_OPTIONS.items():
-            if size == self._chunk_size:
-                self._chunk_var.set(name)
-                break
-        self._chunk_combo.pack(side=tk.LEFT, padx=(4, 0))
-
-        # ---- 下载任务区 ----
-        tasks_frame = ttk.LabelFrame(main, text="下载任务", padding=6)
-        tasks_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-
-        # 可滚动的任务容器
-        self._tasks_canvas = tk.Canvas(tasks_frame, height=160, highlightthickness=0)
-        tasks_scrollbar = ttk.Scrollbar(
-            tasks_frame, orient=tk.VERTICAL, command=self._tasks_canvas.yview
-        )
-        self._tasks_scroll_frame = ttk.Frame(self._tasks_canvas)
-
-        self._tasks_scroll_frame.bind(
-            "<Configure>",
-            lambda e: self._tasks_canvas.configure(
-                scrollregion=self._tasks_canvas.bbox("all")
-            ),
-        )
-        self._tasks_canvas.create_window(
-            (0, 0), window=self._tasks_scroll_frame, anchor="nw"
-        )
-        self._tasks_canvas.configure(yscrollcommand=tasks_scrollbar.set)
-
-        self._tasks_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tasks_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 空任务提示
-        self._empty_tasks_label = ttk.Label(
-            self._tasks_scroll_frame,
-            text="暂无下载任务",
-            foreground="#999",
-        )
-        self._empty_tasks_label.pack(pady=20)
+        self._notebook.add(self._settings_page, text="  ⚙ 设置  ")
 
         # ---- 状态栏 ----
         self._status_bar = StatusBarWidget(self)
         self._status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
-        # 启动总速度轮询
-        self._schedule_speed_update()
+    # ==================================================================
+    # 配置管理
+    # ==================================================================
+
+    def _get_config(self) -> ConfigManager | None:
+        """获取当前配置管理器。"""
+        return self._config
+
+    def _on_config_unlocked(self, config: ConfigManager) -> None:
+        """配置解锁回调。
+
+        Args:
+            config: 已解锁的 ConfigManager。
+        """
+        self._config = config
+        self._load_settings_from_config()
+        self._status_bar.set_status("配置已解锁")
+
+    def _on_config_imported(self) -> None:
+        """配置导入成功回调。"""
+        self._load_settings_from_config()
+        self._account_page.refresh()
+        self._status_bar.set_status("配置已导入并刷新")
+
+    def _try_load_settings(self) -> None:
+        """尝试加载设置（配置文件存在时延迟到用户解锁）。"""
+        config_path = Path.home() / ".yunx" / "config.enc"
+        if not config_path.exists():
+            return
+        # 配置文件存在，延迟到用户主动解锁
+
+    def _load_settings_from_config(self) -> None:
+        """从已解锁的 ConfigManager 加载设置到 UI。"""
+        if self._config is None:
+            return
+
+        try:
+            settings = {}
+            self._save_path = self._config.get("save_path", DEFAULT_SAVE_PATH)
+            settings["save_path"] = self._save_path
+
+            self._concurrency = int(self._config.get("concurrency", DEFAULT_CONCURRENCY))
+            settings["concurrency"] = self._concurrency
+
+            self._chunk_size = int(self._config.get("chunk_size", DEFAULT_CHUNK_SIZE))
+            settings["chunk_size"] = self._chunk_size
+
+            self._clipboard_monitor = bool(
+                self._config.get("clipboard_monitor", DEFAULT_CLIPBOARD_MONITOR)
+            )
+            settings["clipboard_monitor"] = self._clipboard_monitor
+
+            self._sound_notify = bool(self._config.get("sound_notify", DEFAULT_SOUND_NOTIFY))
+            settings["sound_notify"] = self._sound_notify
+
+            self._theme = self._config.get("theme", "light")
+            settings["theme"] = self._theme
+
+            # 更新各页面
+            self._parse_page.update_settings(
+                save_path=self._save_path,
+                concurrency=self._concurrency,
+                chunk_size=self._chunk_size,
+            )
+            self._settings_page.load_settings(settings)
+
+            # 更新菜单剪贴板状态
+            if hasattr(self, "_clipboard_monitor_var"):
+                self._clipboard_monitor_var.set(self._clipboard_monitor)
+
+            # 应用主题
+            self._theme_manager.apply_theme(self._theme)
+        except Exception:
+            pass
+
+    def _on_settings_change(self, settings: dict[str, Any]) -> None:
+        """设置变化回调。
+
+        Args:
+            settings: 新的设置字典。
+        """
+        self._save_path = settings.get("save_path", self._save_path)
+        self._concurrency = settings.get("concurrency", self._concurrency)
+        self._chunk_size = settings.get("chunk_size", self._chunk_size)
+        self._clipboard_monitor = settings.get("clipboard_monitor", self._clipboard_monitor)
+        self._sound_notify = settings.get("sound_notify", self._sound_notify)
+        self._theme = settings.get("theme", self._theme)
+
+        # 同步到解析页
+        self._parse_page.update_settings(
+            save_path=self._save_path,
+            concurrency=self._concurrency,
+            chunk_size=self._chunk_size,
+        )
+
+        # 同步剪贴板监听
+        if hasattr(self, "_clipboard_monitor_var"):
+            self._clipboard_monitor_var.set(self._clipboard_monitor)
+        if self._clipboard_monitor and not self._clipboard_polling:
+            self._start_clipboard_polling()
+        elif not self._clipboard_monitor and self._clipboard_polling:
+            self._clipboard_polling = False
+
+    def _on_theme_change(self, theme_name: str) -> None:
+        """主题变化回调。
+
+        Args:
+            theme_name: 主题标识。
+        """
+        self._theme = theme_name
+        self._theme_manager.apply_theme(theme_name)
+        self._status_bar.set_status(f"已切换到{theme_name}主题")
 
     # ==================================================================
     # 解析流程
@@ -344,7 +348,7 @@ class YunXApp(tk.Tk):
                 return
 
         # 禁用解析按钮
-        self._url_input.set_parsing(True)
+        self._parse_page.set_parsing(True)
         self._status_bar.set_status("正在解析...")
 
         # 在子线程中执行解析
@@ -363,7 +367,7 @@ class YunXApp(tk.Tk):
             extract_code: 提取码。
         """
         try:
-            # 获取对应网盘的凭证（如果已配置）
+            # 获取对应网盘的凭证
             credential = None
             if self._config is not None:
                 detected = detect_share_url(url)
@@ -386,7 +390,7 @@ class YunXApp(tk.Tk):
             self.after(
                 0,
                 lambda: self._parse_error(
-                    f"认证失败：{exc}\n请在「账号」菜单中配置正确的登录凭证。"
+                    f"认证失败：{exc}\n请在「账号管理」页配置正确的登录凭证。"
                 ),
             )
         except BaiduRiskWarning as exc:
@@ -405,13 +409,13 @@ class YunXApp(tk.Tk):
         """
         self._current_share_infos = [share_info]
         self._current_drive = drive
-        self._file_list.set_files([share_info], drive)
+        self._parse_page.set_files([share_info], drive)
 
         display = get_drive_display(drive)
         self._status_bar.set_status(
             f"解析成功：{share_info.file_name}（{format_size(share_info.file_size)}）"
         )
-        self._url_input.set_parsing(False)
+        self._parse_page.set_parsing(False)
 
     def _parse_error(self, message: str) -> None:
         """解析失败回调（主线程）。
@@ -419,7 +423,7 @@ class YunXApp(tk.Tk):
         Args:
             message: 错误信息。
         """
-        self._url_input.set_parsing(False)
+        self._parse_page.set_parsing(False)
         self._status_bar.set_status("解析失败")
         messagebox.showerror("解析失败", message, parent=self)
 
@@ -427,32 +431,21 @@ class YunXApp(tk.Tk):
     # 下载流程
     # ==================================================================
 
-    def _on_download_selected(self) -> None:
-        """下载选中的文件。"""
-        selected = self._file_list.get_selected_files()
-        if not selected:
-            messagebox.showinfo("提示", "请先在文件列表中选择要下载的文件", parent=self)
-            return
-        self._start_downloads(selected)
-
-    def _on_download_all(self) -> None:
-        """下载所有文件。"""
-        all_files = self._file_list.get_all_files()
-        if not all_files:
-            messagebox.showinfo("提示", "文件列表为空，请先解析分享链接", parent=self)
-            return
-        self._start_downloads(all_files)
-
-    def _start_downloads(self, share_infos: list[ShareInfo]) -> None:
+    def _on_start_downloads(
+        self,
+        share_infos: list[ShareInfo],
+        save_path: str,
+        concurrency: int,
+        chunk_size: int,
+    ) -> None:
         """启动一批下载任务。
 
         Args:
             share_infos: 要下载的文件列表。
+            save_path: 保存目录。
+            concurrency: 并发数。
+            chunk_size: 分片大小。
         """
-        save_path = self._save_path_var.get().strip() or DEFAULT_SAVE_PATH
-        concurrency = int(self._concurrency_var.get())
-        chunk_size = CHUNK_SIZE_OPTIONS.get(self._chunk_var.get(), DEFAULT_CHUNK_SIZE)
-
         # 确保保存目录存在
         try:
             os.makedirs(save_path, exist_ok=True)
@@ -460,6 +453,7 @@ class YunXApp(tk.Tk):
             messagebox.showerror("错误", f"无法创建下载目录：{exc}", parent=self)
             return
 
+        started = 0
         for info in share_infos:
             if not info.direct_url:
                 messagebox.showwarning(
@@ -467,8 +461,7 @@ class YunXApp(tk.Tk):
                 )
                 continue
 
-            task = DownloadTaskWidget(
-                master=self._tasks_scroll_frame,
+            task = self._download_page.create_task(
                 file_name=info.file_name,
                 url=info.direct_url,
                 output_dir=save_path,
@@ -477,13 +470,14 @@ class YunXApp(tk.Tk):
                 on_status_change=self._on_task_status_change,
                 on_remove=self._on_task_remove,
             )
-            task.pack(fill=tk.X, padx=2, pady=2)
             self._download_tasks.append(task)
             task.start()
+            started += 1
 
-        # 隐藏空任务提示
-        self._empty_tasks_label.pack_forget()
-        self._status_bar.set_status(f"已启动 {len(share_infos)} 个下载任务")
+        if started > 0:
+            self._status_bar.set_status(f"已启动 {started} 个下载任务")
+            # 自动切换到下载管理页
+            self._notebook.select(1)
 
     def _on_task_status_change(
         self, task: DownloadTaskWidget, status: str
@@ -498,6 +492,7 @@ class YunXApp(tk.Tk):
             self._status_bar.set_status(f"下载完成：{task.file_name}")
             if self._sound_notify:
                 self._play_notify_sound()
+        self._download_page._update_toolbar_state()
 
     def _on_task_remove(self, task: DownloadTaskWidget) -> None:
         """移除下载任务。
@@ -507,11 +502,7 @@ class YunXApp(tk.Tk):
         """
         if task in self._download_tasks:
             self._download_tasks.remove(task)
-        task.destroy()
-
-        # 如果没有任务了，显示空提示
-        if not self._download_tasks:
-            self._empty_tasks_label.pack(pady=20)
+        self._download_page.remove_task(task)
 
     def _schedule_speed_update(self) -> None:
         """调度总速度更新（每 500ms）。"""
@@ -522,37 +513,99 @@ class YunXApp(tk.Tk):
         """更新状态栏的总下载速度。"""
         total_speed = sum(t.speed for t in self._download_tasks)
         self._status_bar.set_total_speed(total_speed)
+        self._download_page.update_total_speed(total_speed)
 
     # ==================================================================
-    # 控制区事件
+    # 剪贴板监听
     # ==================================================================
 
-    def _on_concurrency_change(self, _value: str) -> None:
-        """并发数滑块变化。"""
-        self._concurrency_label.config(text=str(int(self._concurrency_var.get())))
+    def _toggle_clipboard_monitor(self) -> None:
+        """切换剪贴板监听开关。"""
+        enabled = self._clipboard_monitor_var.get()
+        self._clipboard_monitor = enabled
 
-    def _browse_save_path(self) -> None:
-        """浏览选择保存路径。"""
-        path = filedialog.askdirectory(
-            title="选择下载保存目录",
-            initialdir=self._save_path_var.get() or str(Path.home()),
-            parent=self,
-        )
-        if path:
-            self._save_path_var.set(path)
-            self._save_path = path
+        if enabled:
+            self._start_clipboard_polling()
+            self._status_bar.set_status("剪贴板监听已开启")
+        else:
+            self._clipboard_polling = False
+            self._status_bar.set_status("剪贴板监听已关闭")
+
+        # 持久化
+        if self._config is not None:
+            try:
+                self._config.set("clipboard_monitor", enabled)
+                self._config.save()
+            except Exception:
+                pass
+
+    def _start_clipboard_polling(self) -> None:
+        """启动剪贴板轮询。"""
+        if self._clipboard_polling:
+            return
+        self._clipboard_polling = True
+        self._last_clipboard = ""
+        self._poll_clipboard()
+
+    def _poll_clipboard(self) -> None:
+        """轮询剪贴板内容变化。"""
+        if not self._clipboard_polling:
+            return
+
+        try:
+            text = self.clipboard_get()
+            if text and text != self._last_clipboard:
+                self._last_clipboard = text
+                urls = detect_share_url(text)
+                if urls:
+                    share = urls[0]
+                    # 在解析页显示提示条
+                    self._parse_page.show_clipboard_hint(share.url, share.drive)
+                    self._status_bar.set_status(
+                        f"检测到剪贴板中的{get_drive_display(share.drive)}链接"
+                    )
+        except tk.TclError:
+            pass
+
+        self.after(1000, self._poll_clipboard)
 
     # ==================================================================
     # 菜单事件
     # ==================================================================
 
+    def _menu_export_config(self) -> None:
+        """文件 → 导出配置。"""
+        if self._config is None:
+            messagebox.showinfo("提示", "请先在「账号管理」页解锁配置", parent=self)
+            self._notebook.select(2)
+            return
+        ExportConfigDialog(self, self._config)
+
+    def _menu_import_config(self) -> None:
+        """文件 → 导入配置。"""
+        if self._config is None:
+            messagebox.showinfo("提示", "请先在「账号管理」页解锁配置", parent=self)
+            self._notebook.select(2)
+            return
+        ImportConfigDialog(self, self._config, on_imported=self._on_config_imported)
+
     def _menu_set_save_path(self) -> None:
         """文件 → 设置保存路径。"""
-        self._browse_save_path()
+        from tkinter import filedialog
+
+        path = filedialog.askdirectory(
+            title="选择下载保存目录",
+            initialdir=self._save_path or str(Path.home()),
+            parent=self,
+        )
+        if path:
+            self._save_path = path
+            self._parse_page.update_settings(save_path=path)
+            self._settings_page._path_var.set(path)
 
     def _menu_clean_temp(self) -> None:
         """工具 → 清理临时转存文件。"""
-        save_path = self._save_path_var.get().strip()
+        save_path = self._save_path
         if not save_path:
             return
 
@@ -573,12 +626,11 @@ class YunXApp(tk.Tk):
 
     def _menu_open_download_dir(self) -> None:
         """工具 → 打开下载目录。"""
-        path = self._save_path_var.get().strip()
+        path = self._save_path
         if not path or not os.path.isdir(path):
             messagebox.showwarning("提示", "下载目录不存在", parent=self)
             return
 
-        # 跨平台打开目录
         import subprocess
         import sys
 
@@ -592,29 +644,22 @@ class YunXApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("错误", f"无法打开目录：{exc}", parent=self)
 
-    def _menu_account_manager(self) -> None:
-        """账号 → 管理网盘账号。"""
-        dlg = AccountManagerDialog(self)
-        # 如果用户在账号管理中解锁了配置，保存引用
-        if dlg._config is not None:
-            self._config = dlg._config
-            self._load_settings_from_config()
-
     def _menu_help(self) -> None:
         """帮助 → 使用说明。"""
         help_text = (
             "YunX 云析 使用说明\n\n"
             "1. 复制网盘分享链接（夸克、123云盘、迅雷、百度、UC、和彩云）\n"
-            "2. 粘贴到链接输入框，如有提取码请一并填写\n"
+            "2. 在「解析」页粘贴链接，如有提取码请一并填写\n"
             "3. 点击「解析」按钮获取文件信息和下载直链\n"
-            "4. 在文件列表中选择要下载的文件（支持多选）\n"
+            "4. 在文件列表中选择要下载的文件（支持多选/全选/反选）\n"
             "5. 设置保存路径、并发数和分片大小\n"
             "6. 点击「下载选中」或「全部下载」开始下载\n"
-            "7. 下载过程中可暂停、恢复或取消任务\n\n"
+            "7. 在「下载管理」页查看进度，可暂停/恢复/取消任务\n\n"
             "提示：\n"
             "  • 百度网盘使用前请仔细阅读风控警告\n"
-            "  • 部分网盘需要登录凭证（Cookie），可在「账号」菜单中配置\n"
+            "  • 部分网盘需要登录凭证（Cookie），可在「账号管理」页配置\n"
             "  • 凭证通过 AES-GCM 加密存储在 ~/.yunx/config.enc\n"
+            "  • 配置可通过「文件 → 导出/导入配置」备份迁移\n"
             "  • 并发数建议 4-16，分片大小建议 4MB"
         )
         messagebox.showinfo("使用说明", help_text, parent=self)
@@ -625,10 +670,11 @@ class YunXApp(tk.Tk):
             f"{__app_name__} v{__version__}\n\n"
             "全平台网盘解析 + 高速下载工具\n"
             "支持夸克、123云盘、迅雷、百度、UC、和彩云\n\n"
-            "桌面端：tkinter + ttk\n"
+            "桌面端：tkinter + ttk（Material 3 风格）\n"
             "核心引擎：Python 3.10+\n"
             "下载引擎：Range 分片并发 + 断点续传\n"
-            "凭证加密：AES-256-GCM"
+            "凭证加密：AES-256-GCM\n\n"
+            "开源协议：MIT License"
         )
         messagebox.showinfo("关于", about_text, parent=self)
 
@@ -646,97 +692,26 @@ class YunXApp(tk.Tk):
         )
         messagebox.showwarning("免责声明", disclaimer, parent=self)
 
+    def _menu_github(self) -> None:
+        """帮助 → GitHub。"""
+        import webbrowser
+
+        try:
+            webbrowser.open("https://github.com/yunx-dev/yunx-cross-platform")
+        except Exception:
+            messagebox.showinfo(
+                "GitHub",
+                "https://github.com/yunx-dev/yunx-cross-platform",
+                parent=self,
+            )
+
     def _on_quit(self) -> None:
         """退出应用。"""
         # 取消所有下载任务
         for task in self._download_tasks:
             task.cancel()
+        self._clipboard_polling = False
         self.destroy()
-
-    # ==================================================================
-    # 剪贴板监听
-    # ==================================================================
-
-    def _toggle_clipboard_monitor(self) -> None:
-        """切换剪贴板监听开关。"""
-        enabled = self._clipboard_monitor_var.get()
-        self._clipboard_monitor = enabled
-        if enabled:
-            self._clipboard_polling = True
-            self._last_clipboard = ""
-            self._poll_clipboard()
-            self._status_bar.set_status("剪贴板监听已开启")
-        else:
-            self._clipboard_polling = False
-            self._status_bar.set_status("剪贴板监听已关闭")
-
-    def _poll_clipboard(self) -> None:
-        """轮询剪贴板内容变化。"""
-        if not self._clipboard_polling:
-            return
-
-        try:
-            text = self.clipboard_get()
-            if text and text != self._last_clipboard:
-                self._last_clipboard = text
-                urls = detect_share_url(text)
-                if urls:
-                    share = urls[0]
-                    self._url_input.set_url(share.url)
-                    if share.extract_code:
-                        self._url_input.set_extract_code(share.extract_code)
-                    self._status_bar.set_status(
-                        f"已从剪贴板识别：{get_drive_display(share.drive)} 链接"
-                    )
-        except tk.TclError:
-            pass
-
-        self.after(1000, self._poll_clipboard)
-
-    # ==================================================================
-    # 设置管理
-    # ==================================================================
-
-    def _try_load_settings(self) -> None:
-        """尝试加载设置（配置文件存在时提示输入密码）。
-
-        如果配置文件不存在，使用默认设置。
-        """
-        config_path = Path.home() / ".yunx" / "config.enc"
-        if not config_path.exists():
-            return
-
-        # 配置文件存在，延迟到用户主动打开账号管理时再解锁
-        # 这里不自动弹窗，避免打扰用户
-
-    def _load_settings_from_config(self) -> None:
-        """从已解锁的 ConfigManager 加载设置到 UI。"""
-        if self._config is None:
-            return
-
-        try:
-            self._save_path = self._config.get("save_path", DEFAULT_SAVE_PATH)
-            self._save_path_var.set(self._save_path)
-
-            self._concurrency = int(self._config.get("concurrency", DEFAULT_CONCURRENCY))
-            self._concurrency_var.set(self._concurrency)
-            self._concurrency_label.config(text=str(self._concurrency))
-
-            self._chunk_size = int(self._config.get("chunk_size", DEFAULT_CHUNK_SIZE))
-            for name, size in CHUNK_SIZE_OPTIONS.items():
-                if size == self._chunk_size:
-                    self._chunk_var.set(name)
-                    break
-
-            self._clipboard_monitor = bool(
-                self._config.get("clipboard_monitor", False)
-            )
-            self._clipboard_monitor_var.set(self._clipboard_monitor)
-
-            self._sound_notify = bool(self._config.get("sound_notify", True))
-            self._theme = self._config.get("theme", "浅色")
-        except Exception:
-            pass
 
     # ==================================================================
     # 工具方法
@@ -753,7 +728,6 @@ class YunXApp(tk.Tk):
 
                 winsound.MessageBeep(winsound.MB_ICONASTERISK)
             elif sys.platform == "darwin":
-                # macOS: 用 afplay 播放系统提示音
                 import subprocess
 
                 subprocess.Popen(
@@ -762,7 +736,6 @@ class YunXApp(tk.Tk):
                     stderr=subprocess.DEVNULL,
                 )
             else:
-                # Linux: 尝试用 paplay 或 beep
                 import subprocess
 
                 subprocess.Popen(
@@ -771,4 +744,4 @@ class YunXApp(tk.Tk):
                     stderr=subprocess.DEVNULL,
                 )
         except Exception:
-            pass  # 静默失败
+            pass

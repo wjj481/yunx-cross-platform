@@ -7,4 +7,4 @@ YunX 移动端 GUI（Kivy 跨平台框架）。
 入口：``python -m mobile_gui.main``
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

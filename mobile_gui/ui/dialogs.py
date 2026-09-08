@@ -6,12 +6,16 @@
 - 错误提示弹窗
 - 通用确认弹窗
 - 添加账号弹窗
+- 配置导出弹窗（路径选择 + 明文/加密 + 密码）
+- 配置导入弹窗（文件选择 + 密码 + 合并/替换）
+- 密码输入弹窗
 
 所有弹窗均使用 Material Design 风格，圆角卡片 + 半透明遮罩。
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from kivy.clock import Clock
@@ -24,7 +28,7 @@ from kivy.uix.modalview import ModalView
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 
-from mobile_gui.ui.widgets import MaterialButton, hex_to_rgba
+from mobile_gui.ui.widgets import MaterialButton, OutlinedButton, hex_to_rgba
 
 
 # ===========================================================================
@@ -245,7 +249,7 @@ class ErrorDialog(BaseDialog):
         # 按钮
         ok_btn = MaterialButton(
             text="确定",
-            bg_color="#2196F3",
+            bg_color="#1976D2",
             font_size=sp(15),
         )
         ok_btn.bind(on_release=self._on_ok)
@@ -315,7 +319,7 @@ class ConfirmDialog(BaseDialog):
         )
         cancel_btn = MaterialButton(text=cancel_text, bg_color="#9E9E9E", font_size=sp(14))
         cancel_btn.bind(on_release=self._on_cancel_pressed)
-        confirm_btn = MaterialButton(text=confirm_text, bg_color="#2196F3", font_size=sp(14))
+        confirm_btn = MaterialButton(text=confirm_text, bg_color="#1976D2", font_size=sp(14))
         confirm_btn.bind(on_release=self._on_confirm_pressed)
         btn_box.add_widget(cancel_btn)
         btn_box.add_widget(confirm_btn)
@@ -354,11 +358,11 @@ class AddAccountDialog(BaseDialog):
     ) -> None:
         super().__init__(**kwargs)
         self.size_hint = (0.9, None)
-        self.height = dp(340)
+        self.height = dp(360)
         self._on_save = on_save
         self._drive_index = 0
 
-        card = self._make_card(340)
+        card = self._make_card(360)
 
         # 标题
         title = Label(
@@ -387,6 +391,17 @@ class AddAccountDialog(BaseDialog):
         drive_box.add_widget(next_btn)
         card.add_widget(drive_box)
 
+        # 百度网盘风控警告提示
+        self._baidu_warning = Label(
+            text="[color=#F44336]⚠️ 百度网盘存在风控风险，频繁使用可能导致账号被封[/color]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(11),
+            opacity=0,
+        )
+        card.add_widget(self._baidu_warning)
+
         # 凭证类型标签
         type_label = Label(
             text="Cookie / Token（粘贴完整凭证）",
@@ -406,7 +421,7 @@ class AddAccountDialog(BaseDialog):
             font_size=sp(13),
             background_color=hex_to_rgba("#F5F5F5"),
             foreground_color=hex_to_rgba("#212121"),
-            cursor_color=hex_to_rgba("#2196F3"),
+            cursor_color=hex_to_rgba("#1976D2"),
             hint_text="例如：cookie=...; 或 {\"access_token\": \"...\"}",
         )
         card.add_widget(self._credential_input)
@@ -431,10 +446,19 @@ class AddAccountDialog(BaseDialog):
     def _prev_drive(self, *args: Any) -> None:
         self._drive_index = (self._drive_index - 1) % len(self.DRIVE_OPTIONS)
         self._drive_label.text = self.DRIVE_OPTIONS[self._drive_index]
+        self._update_baidu_warning()
 
     def _next_drive(self, *args: Any) -> None:
         self._drive_index = (self._drive_index + 1) % len(self.DRIVE_OPTIONS)
         self._drive_label.text = self.DRIVE_OPTIONS[self._drive_index]
+        self._update_baidu_warning()
+
+    def _update_baidu_warning(self) -> None:
+        """切换到百度网盘时显示风控警告。"""
+        if self.DRIVE_KEYS[self._drive_index] == "baidu":
+            self._baidu_warning.opacity = 1
+        else:
+            self._baidu_warning.opacity = 0
 
     def _on_save_pressed(self, *args: Any) -> None:
         drive_key = self.DRIVE_KEYS[self._drive_index]
@@ -455,3 +479,671 @@ class AddAccountDialog(BaseDialog):
         self.dismiss()
         if self._on_save:
             self._on_save(drive_key, credential)
+
+
+# ===========================================================================
+# 密码输入弹窗
+# ===========================================================================
+
+class PasswordDialog(BaseDialog):
+    """密码输入弹窗。
+
+    用于加密配置导出时设置密码，或加密配置导入时输入密码。
+    支持两次确认（设置密码模式）和单次输入（验证密码模式）。
+    """
+
+    def __init__(
+        self,
+        title: str = "输入密码",
+        message: str = "",
+        confirm: bool = False,
+        on_submit: Callable[[str], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.height = dp(220 if confirm else 180)
+        self._on_submit = on_submit
+        self._on_cancel = on_cancel
+        self._confirm_mode = confirm
+
+        card = self._make_card(220 if confirm else 180)
+
+        # 标题
+        title_label = Label(
+            text=f"[b]{title}[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(28),
+            font_size=sp(17),
+        )
+        card.add_widget(title_label)
+
+        # 提示消息
+        if message:
+            msg_label = Label(
+                text=message,
+                size_hint_y=None,
+                height=dp(24),
+                font_size=sp(12),
+                color=hex_to_rgba("#757575"),
+                halign="center",
+            )
+            card.add_widget(msg_label)
+
+        # 密码输入框
+        self._password_input = TextInput(
+            multiline=False,
+            password=True,
+            size_hint_y=None,
+            height=dp(40),
+            font_size=sp(14),
+            background_color=hex_to_rgba("#F5F5F5"),
+            foreground_color=hex_to_rgba("#212121"),
+            cursor_color=hex_to_rgba("#1976D2"),
+            hint_text="请输入密码",
+        )
+        card.add_widget(self._password_input)
+
+        # 确认密码输入框（仅设置模式）
+        if confirm:
+            self._confirm_input = TextInput(
+                multiline=False,
+                password=True,
+                size_hint_y=None,
+                height=dp(40),
+                font_size=sp(14),
+                background_color=hex_to_rgba("#F5F5F5"),
+                foreground_color=hex_to_rgba("#212121"),
+                cursor_color=hex_to_rgba("#1976D2"),
+                hint_text="请再次输入密码",
+            )
+            card.add_widget(self._confirm_input)
+
+            # 密码强度提示
+            self._strength_label = Label(
+                text="",
+                size_hint_y=None,
+                height=dp(18),
+                font_size=sp(11),
+                halign="left",
+            )
+            card.add_widget(self._strength_label)
+            self._password_input.bind(text=self._on_password_text)
+
+        # 按钮
+        btn_box = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(44),
+            spacing=dp(12),
+        )
+        cancel_btn = MaterialButton(text="取消", bg_color="#9E9E9E", font_size=sp(14))
+        cancel_btn.bind(on_release=self._on_cancel_pressed)
+        submit_btn = MaterialButton(text="确定", bg_color="#1976D2", font_size=sp(14))
+        submit_btn.bind(on_release=self._on_submit_pressed)
+        btn_box.add_widget(cancel_btn)
+        btn_box.add_widget(submit_btn)
+        card.add_widget(btn_box)
+
+        self.add_widget(card)
+
+    def _on_password_text(self, instance: Any, value: str) -> None:
+        """密码强度提示。"""
+        if not value:
+            self._strength_label.text = ""
+            return
+        score = 0
+        if len(value) >= 6:
+            score += 1
+        if len(value) >= 10:
+            score += 1
+        if any(c.isdigit() for c in value):
+            score += 1
+        if any(c.isalpha() for c in value):
+            score += 1
+        if any(not c.isalnum() for c in value):
+            score += 1
+
+        if score <= 2:
+            self._strength_label.text = "[color=#F44336]密码强度：弱[/color]"
+            self._strength_label.markup = True
+        elif score <= 3:
+            self._strength_label.text = "[color=#FF9800]密码强度：中[/color]"
+            self._strength_label.markup = True
+        else:
+            self._strength_label.text = "[color=#4CAF50]密码强度：强[/color]"
+            self._strength_label.markup = True
+
+    def _on_submit_pressed(self, *args: Any) -> None:
+        password = self._password_input.text
+        if not password:
+            return
+        if self._confirm_mode:
+            confirm = self._confirm_input.text
+            if password != confirm:
+                self._strength_label.text = "[color=#F44336]两次输入的密码不一致[/color]"
+                self._strength_label.markup = True
+                return
+        self.dismiss()
+        if self._on_submit:
+            self._on_submit(password)
+
+    def _on_cancel_pressed(self, *args: Any) -> None:
+        self.dismiss()
+        if self._on_cancel:
+            self._on_cancel()
+
+
+# ===========================================================================
+# 配置导出弹窗
+# ===========================================================================
+
+class ExportConfigDialog(BaseDialog):
+    """配置导出弹窗。
+
+    选择保存路径，选择明文/加密导出，加密时设置密码。
+    回调 ``on_export`` 参数为 (output_path, password_or_None, include_tasks)。
+    """
+
+    def __init__(
+        self,
+        default_path: str = "",
+        on_export: Callable[[str, str | None, bool], None] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.size_hint = (0.9, None)
+        self.height = dp(340)
+        self._on_export = on_export
+        self._encrypted = False
+        self._password: str | None = None
+
+        card = self._make_card(340)
+
+        # 标题
+        title = Label(
+            text="[b]导出配置[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(28),
+            font_size=sp(17),
+        )
+        card.add_widget(title)
+
+        # 说明
+        desc = Label(
+            text="导出内容：所有网盘凭证、下载设置、已保存任务",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(11),
+            color=hex_to_rgba("#757575"),
+            halign="left",
+        )
+        card.add_widget(desc)
+
+        # 保存路径
+        path_label = Label(
+            text="保存路径",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(13),
+            bold=True,
+            halign="left",
+        )
+        card.add_widget(path_label)
+
+        self._path_input = TextInput(
+            multiline=False,
+            text=default_path,
+            size_hint_y=None,
+            height=dp(40),
+            font_size=sp(12),
+            background_color=hex_to_rgba("#F5F5F5"),
+            foreground_color=hex_to_rgba("#212121"),
+            cursor_color=hex_to_rgba("#1976D2"),
+        )
+        card.add_widget(self._path_input)
+
+        # 导出模式选择
+        mode_label = Label(
+            text="导出模式",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(13),
+            bold=True,
+            halign="left",
+        )
+        card.add_widget(mode_label)
+
+        mode_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(8),
+        )
+        self._plain_btn = MaterialButton(
+            text="明文导出",
+            bg_color="#1976D2",
+            font_size=sp(13),
+            height=dp(36),
+        )
+        self._plain_btn.bind(on_release=lambda *a: self._set_mode(False))
+        self._encrypt_btn = MaterialButton(
+            text="加密导出",
+            bg_color="#BDBDBD",
+            font_size=sp(13),
+            height=dp(36),
+        )
+        self._encrypt_btn.bind(on_release=lambda *a: self._set_mode(True))
+        mode_row.add_widget(self._plain_btn)
+        mode_row.add_widget(self._encrypt_btn)
+        card.add_widget(mode_row)
+
+        # 密码状态标签
+        self._password_status = Label(
+            text="",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(12),
+            halign="left",
+        )
+        card.add_widget(self._password_status)
+
+        # 包含任务开关
+        from kivy.uix.switch import Switch
+        task_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(36),
+        )
+        task_label = Label(
+            text="包含已保存下载任务",
+            font_size=sp(13),
+            halign="left",
+        )
+        self._task_switch = Switch(active=True, size_hint=(None, None), size=(dp(44), dp(26)))
+        task_row.add_widget(task_label)
+        task_row.add_widget(self._task_switch)
+        card.add_widget(task_row)
+
+        # 按钮
+        btn_box = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(44),
+            spacing=dp(12),
+        )
+        cancel_btn = MaterialButton(text="取消", bg_color="#9E9E9E", font_size=sp(14))
+        cancel_btn.bind(on_release=lambda *a: self.dismiss())
+        export_btn = MaterialButton(text="导出", bg_color="#4CAF50", font_size=sp(14))
+        export_btn.bind(on_release=self._on_export_pressed)
+        btn_box.add_widget(cancel_btn)
+        btn_box.add_widget(export_btn)
+        card.add_widget(btn_box)
+
+        self.add_widget(card)
+
+    def _set_mode(self, encrypted: bool) -> None:
+        """设置导出模式。"""
+        self._encrypted = encrypted
+        if encrypted:
+            self._plain_btn.bg_color = "#BDBDBD"
+            self._encrypt_btn.bg_color = "#1976D2"
+            # 弹出密码设置
+            PasswordDialog(
+                title="设置加密密码",
+                message="密码将用于加密配置文件，请牢记",
+                confirm=True,
+                on_submit=self._on_password_set,
+                on_cancel=lambda: self._set_mode(False),
+            ).open()
+        else:
+            self._plain_btn.bg_color = "#1976D2"
+            self._encrypt_btn.bg_color = "#BDBDBD"
+            self._password = None
+            self._password_status.text = ""
+
+    def _on_password_set(self, password: str) -> None:
+        """密码设置完成回调。"""
+        self._password = password
+        self._password_status.text = "[color=#4CAF50]✓ 已设置加密密码[/color]"
+        self._password_status.markup = True
+
+    def _on_export_pressed(self, *args: Any) -> None:
+        """导出按钮回调。"""
+        output_path = self._path_input.text.strip()
+        if not output_path:
+            return
+        if self._encrypted and not self._password:
+            # 重新要求设置密码
+            self._set_mode(True)
+            return
+        self.dismiss()
+        if self._on_export:
+            self._on_export(
+                output_path,
+                self._password if self._encrypted else None,
+                self._task_switch.active,
+            )
+
+
+# ===========================================================================
+# 配置导入弹窗
+# ===========================================================================
+
+class ImportConfigDialog(BaseDialog):
+    """配置导入弹窗。
+
+    输入文件路径，自动检测加密，加密时输入密码，选择合并/替换模式。
+    回调 ``on_import`` 参数为 (file_path, password_or_None, merge)。
+    """
+
+    def __init__(
+        self,
+        default_dir: str = "",
+        on_import: Callable[[str, str | None, bool], None] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.size_hint = (0.9, None)
+        self.height = dp(320)
+        self._on_import = on_import
+        self._default_dir = default_dir
+        self._merge = True
+        self._password: str | None = None
+        self._file_encrypted = False
+
+        card = self._make_card(320)
+
+        # 标题
+        title = Label(
+            text="[b]导入配置[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(28),
+            font_size=sp(17),
+        )
+        card.add_widget(title)
+
+        # 文件路径
+        path_label = Label(
+            text="配置文件路径（.yunxcfg）",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(13),
+            bold=True,
+            halign="left",
+        )
+        card.add_widget(path_label)
+
+        path_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(8),
+        )
+        self._path_input = TextInput(
+            multiline=False,
+            size_hint_x=0.75,
+            font_size=sp(12),
+            background_color=hex_to_rgba("#F5F5F5"),
+            foreground_color=hex_to_rgba("#212121"),
+            cursor_color=hex_to_rgba("#1976D2"),
+            hint_text="输入或粘贴 .yunxcfg 文件路径",
+        )
+        scan_btn = MaterialButton(
+            text="扫描",
+            bg_color="#78909C",
+            font_size=sp(12),
+            size_hint_x=0.25,
+            height=dp(36),
+        )
+        scan_btn.bind(on_release=self._on_scan)
+        path_row.add_widget(self._path_input)
+        path_row.add_widget(scan_btn)
+        card.add_widget(path_row)
+
+        # 加密状态标签
+        self._encrypt_status = Label(
+            text="",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(12),
+            halign="left",
+        )
+        card.add_widget(self._encrypt_status)
+
+        # 导入模式
+        mode_label = Label(
+            text="导入模式",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(13),
+            bold=True,
+            halign="left",
+        )
+        card.add_widget(mode_label)
+
+        mode_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(8),
+        )
+        self._merge_btn = MaterialButton(
+            text="合并导入",
+            bg_color="#1976D2",
+            font_size=sp(13),
+            height=dp(36),
+        )
+        self._merge_btn.bind(on_release=lambda *a: self._set_merge(True))
+        self._replace_btn = MaterialButton(
+            text="替换现有",
+            bg_color="#BDBDBD",
+            font_size=sp(13),
+            height=dp(36),
+        )
+        self._replace_btn.bind(on_release=lambda *a: self._set_merge(False))
+        mode_row.add_widget(self._merge_btn)
+        mode_row.add_widget(self._replace_btn)
+        card.add_widget(mode_row)
+
+        # 模式说明
+        self._mode_desc = Label(
+            text="合并：保留现有配置，同名项被导入值覆盖",
+            size_hint_y=None,
+            height=dp(18),
+            font_size=sp(11),
+            color=hex_to_rgba("#757575"),
+            halign="left",
+        )
+        card.add_widget(self._mode_desc)
+
+        # 按钮
+        btn_box = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(44),
+            spacing=dp(12),
+        )
+        cancel_btn = MaterialButton(text="取消", bg_color="#9E9E9E", font_size=sp(14))
+        cancel_btn.bind(on_release=lambda *a: self.dismiss())
+        import_btn = MaterialButton(text="导入", bg_color="#4CAF50", font_size=sp(14))
+        import_btn.bind(on_release=self._on_import_pressed)
+        btn_box.add_widget(cancel_btn)
+        btn_box.add_widget(import_btn)
+        card.add_widget(btn_box)
+
+        self.add_widget(card)
+
+        # 路径变化时自动检测加密
+        self._path_input.bind(text=self._on_path_change)
+
+    def _on_path_change(self, instance: Any, value: str) -> None:
+        """路径变化时检测文件加密状态。"""
+        path = value.strip()
+        if not path or not os.path.exists(path):
+            self._encrypt_status.text = ""
+            self._file_encrypted = False
+            return
+        try:
+            from core import is_encrypted
+            self._file_encrypted = is_encrypted(path)
+            if self._file_encrypted:
+                self._encrypt_status.text = "[color=#FF9800]🔒 检测到加密文件，导入时需输入密码[/color]"
+                self._encrypt_status.markup = True
+            else:
+                self._encrypt_status.text = "[color=#4CAF50]✓ 明文配置文件[/color]"
+                self._encrypt_status.markup = True
+        except Exception:
+            self._encrypt_status.text = ""
+            self._file_encrypted = False
+
+    def _on_scan(self, *args: Any) -> None:
+        """扫描默认目录下的 .yunxcfg 文件。"""
+        scan_dir = self._default_dir or os.path.expanduser("~")
+        found = []
+        try:
+            for f in os.listdir(scan_dir):
+                if f.endswith(".yunxcfg"):
+                    found.append(os.path.join(scan_dir, f))
+        except OSError:
+            pass
+
+        if not found:
+            # 也扫描 Downloads 目录
+            downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+            try:
+                for f in os.listdir(downloads):
+                    if f.endswith(".yunxcfg"):
+                        found.append(os.path.join(downloads, f))
+            except OSError:
+                pass
+
+        if found:
+            self._path_input.text = found[0]
+        else:
+            self._encrypt_status.text = f"[color=#F44336]未在 {scan_dir} 找到 .yunxcfg 文件[/color]"
+            self._encrypt_status.markup = True
+
+    def _set_merge(self, merge: bool) -> None:
+        """设置导入模式。"""
+        self._merge = merge
+        if merge:
+            self._merge_btn.bg_color = "#1976D2"
+            self._replace_btn.bg_color = "#BDBDBD"
+            self._mode_desc.text = "合并：保留现有配置，同名项被导入值覆盖"
+        else:
+            self._merge_btn.bg_color = "#BDBDBD"
+            self._replace_btn.bg_color = "#F44336"
+            self._mode_desc.text = "替换：清空现有配置后写入导入数据（不可恢复）"
+
+    def _on_import_pressed(self, *args: Any) -> None:
+        """导入按钮回调。"""
+        file_path = self._path_input.text.strip()
+        if not file_path or not os.path.exists(file_path):
+            self._encrypt_status.text = "[color=#F44336]请输入有效的配置文件路径[/color]"
+            self._encrypt_status.markup = True
+            return
+
+        if self._file_encrypted:
+            # 需要密码
+            PasswordDialog(
+                title="输入解密密码",
+                message="该配置文件已加密，请输入密码",
+                confirm=False,
+                on_submit=self._on_password_submit,
+            ).open()
+        else:
+            self._password = None
+            self._do_import()
+
+    def _on_password_submit(self, password: str) -> None:
+        """密码输入完成回调。"""
+        self._password = password
+        self._do_import()
+
+    def _do_import(self) -> None:
+        """执行导入。"""
+        file_path = self._path_input.text.strip()
+        self.dismiss()
+        if self._on_import:
+            self._on_import(file_path, self._password, self._merge)
+
+
+# ===========================================================================
+# 导入结果摘要弹窗
+# ===========================================================================
+
+class ImportResultDialog(BaseDialog):
+    """导入结果摘要弹窗。
+
+    显示导入的凭证数、设置数、任务数。
+    """
+
+    def __init__(
+        self,
+        credentials_count: int = 0,
+        settings_count: int = 0,
+        tasks_count: int = 0,
+        on_ok: Callable[[], None] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.height = dp(220)
+        self._on_ok = on_ok
+
+        card = self._make_card(220)
+
+        # 图标
+        icon = Label(
+            text="✅",
+            size_hint_y=None,
+            height=dp(40),
+            font_size=sp(32),
+        )
+        card.add_widget(icon)
+
+        # 标题
+        title = Label(
+            text="[b]配置导入成功[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(28),
+            font_size=sp(17),
+            color=hex_to_rgba("#4CAF50"),
+        )
+        card.add_widget(title)
+
+        # 摘要
+        summary = (
+            f"网盘凭证：{credentials_count} 个\n"
+            f"配置项：{settings_count} 项\n"
+            f"下载任务：{tasks_count} 个"
+        )
+        summary_label = Label(
+            text=summary,
+            size_hint_y=None,
+            height=dp(60),
+            font_size=sp(14),
+            halign="center",
+            valign="middle",
+        )
+        card.add_widget(summary_label)
+
+        # 按钮
+        ok_btn = MaterialButton(
+            text="确定",
+            bg_color="#1976D2",
+            font_size=sp(15),
+        )
+        ok_btn.bind(on_release=self._on_ok_pressed)
+        card.add_widget(ok_btn)
+
+        self.add_widget(card)
+
+    def _on_ok_pressed(self, *args: Any) -> None:
+        self.dismiss()
+        if self._on_ok:
+            self._on_ok()

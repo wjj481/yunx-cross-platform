@@ -1,14 +1,17 @@
 """
 自定义 UI 控件。
 
-提供 Material Design 风格的自定义控件，包括：
-- 圆角按钮（带悬停 / 按下效果）
+提供 Material Design 3 风格的自定义控件，包括：
+- 底部导航栏（BottomNavigationBar + BottomNavItem）
+- 圆角按钮（带按下效果）
 - 网盘标识彩色标签
 - 文件列表项（RecycleView 行）
 - 下载任务卡片
 - Toast 轻提示
 - 自定义进度条
 - 圆角卡片容器
+- 启动页（SplashScreen）
+- 浮动操作按钮（FAB）
 
 所有控件使用 ``dp()`` / ``sp()`` 单位以适配不同屏幕密度，
 并支持浅色 / 深色主题切换。
@@ -39,43 +42,57 @@ from kivy.uix.widget import Widget
 
 
 # ===========================================================================
-# 主题色板
+# 主题色板（Material 3 风格，参考云析原版）
 # ===========================================================================
 
 class Theme:
     """应用主题色板（浅色 / 深色）。
 
-    使用类属性存储当前主题，各控件通过 ``Theme.current()`` 获取。
+    使用类属性存储当前主题，各控件通过 ``Theme.get()`` 获取。
+    主色调采用夸克蓝 #1976D2。
     """
 
     _mode: str = "light"
 
-    # 主色调
-    PRIMARY = "#2196F3"       # 蓝色
-    ACCENT = "#FF9800"        # 橙色
-    DANGER = "#F44336"        # 红色
-    SUCCESS = "#4CAF50"       # 绿色
+    # 主色调（夸克蓝）
+    PRIMARY = "#1976D2"
+    PRIMARY_DARK = "#1565C0"
+    PRIMARY_LIGHT = "#42A5F5"
+    # 辅助色
+    ACCENT = "#FF9800"          # 迅雷橙
+    DANGER = "#F44336"          # 百度红
+    SUCCESS = "#4CAF50"         # 123云盘绿
+    INFO = "#00BCD4"            # 和彩云青
+    PURPLE = "#9C27B0"          # UC紫
 
-    # 浅色主题
+    # 浅色主题（Material 3）
     LIGHT = {
-        "bg":           "#F5F5F5",
-        "card":         "#FFFFFF",
-        "text":         "#212121",
-        "text_secondary": "#757575",
-        "divider":      "#E0E0E0",
-        "input_bg":     "#EEEEEE",
-        "shadow":       "#000000",
+        "bg":              "#FAFAFA",
+        "card":            "#FFFFFF",
+        "text":            "#212121",
+        "text_secondary":  "#757575",
+        "divider":         "#E0E0E0",
+        "input_bg":        "#F5F5F5",
+        "shadow":          "#000000",
+        "nav_bg":          "#FFFFFF",
+        "nav_inactive":    "#9E9E9E",
+        "nav_active":      "#1976D2",
+        "ripple":          "#1976D2",
     }
 
-    # 深色主题
+    # 深色主题（Material 3）
     DARK = {
-        "bg":           "#121212",
-        "card":         "#1E1E1E",
-        "text":         "#FFFFFF",
-        "text_secondary": "#B0B0B0",
-        "divider":      "#333333",
-        "input_bg":     "#2A2A2A",
-        "shadow":       "#000000",
+        "bg":              "#121212",
+        "card":            "#1E1E1E",
+        "text":            "#FFFFFF",
+        "text_secondary":  "#B0B0B0",
+        "divider":         "#333333",
+        "input_bg":        "#2A2A2A",
+        "shadow":          "#000000",
+        "nav_bg":          "#1E1E1E",
+        "nav_inactive":    "#757575",
+        "nav_active":      "#42A5F5",
+        "ripple":          "#42A5F5",
     }
 
     @classmethod
@@ -115,6 +132,204 @@ def hex_to_rgba(hex_color: str, alpha: float = 1.0) -> list[float]:
 
 
 # ===========================================================================
+# 底部导航栏项
+# ===========================================================================
+
+class BottomNavItem(ButtonBehavior, BoxLayout):
+    """底部导航栏单个 Tab 项。
+
+    包含图标（文字 emoji）和标签文字，选中时高亮主色调。
+    """
+
+    icon = StringProperty("")
+    label = StringProperty("")
+    active = BooleanProperty(False)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.size_hint_y = 1
+        self.spacing = dp(2)
+        self.padding = [0, dp(6), 0, dp(4)]
+
+        self._icon_label = Label(
+            text=self.icon,
+            font_size=sp(22),
+            size_hint_y=None,
+            height=dp(26),
+        )
+        self._text_label = Label(
+            text=self.label,
+            font_size=sp(11),
+            size_hint_y=None,
+            height=dp(16),
+        )
+        self.add_widget(self._icon_label)
+        self.add_widget(self._text_label)
+
+        # 选中指示器（顶部小圆点/横条）
+        with self.canvas.before:
+            self._indicator_color = Color(0, 0, 0, 0)
+            self._indicator_rect = RoundedRectangle(
+                pos=self.pos, size=(dp(0), dp(0)), radius=[dp(2)]
+            )
+
+        self.bind(
+            pos=self._update_indicator,
+            size=self._update_indicator,
+            active=self._update_active,
+            icon=self._update_icon,
+            label=self._update_label,
+        )
+        self._update_active()
+
+    def _update_indicator(self, *args: Any) -> None:
+        if self.active:
+            self._indicator_rect.pos = (self.center_x - dp(12), self.top - dp(4))
+            self._indicator_rect.size = (dp(24), dp(3))
+        else:
+            self._indicator_rect.size = (0, 0)
+
+    def _update_active(self, *args: Any) -> None:
+        color = Theme.get("nav_active") if self.active else Theme.get("nav_inactive")
+        rgba = hex_to_rgba(color)
+        self._icon_label.color = rgba
+        self._text_label.color = rgba
+        if self.active:
+            self._indicator_color.rgba = hex_to_rgba(Theme.get("nav_active"))
+        else:
+            self._indicator_color.rgba = [0, 0, 0, 0]
+        self._update_indicator()
+
+    def _update_icon(self, *args: Any) -> None:
+        self._icon_label.text = self.icon
+
+    def _update_label(self, *args: Any) -> None:
+        self._text_label.text = self.label
+
+    def on_state(self, widget: Widget, value: str) -> None:
+        """按下时轻微缩放效果。"""
+        if value == "down":
+            self._icon_label.font_size = sp(20)
+        else:
+            self._icon_label.font_size = sp(22)
+
+
+# ===========================================================================
+# 底部导航栏
+# ===========================================================================
+
+class BottomNavigationBar(BoxLayout):
+    """底部导航栏（Material 3 Bottom Navigation）。
+
+    固定高度 56dp，包含多个 BottomNavItem，点击切换屏幕。
+    白色/深色背景，顶部细线分隔。
+    """
+
+    def __init__(
+        self,
+        items: list[dict[str, str]] | None = None,
+        on_tab_select: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.orientation = "horizontal"
+        self.size_hint_y = None
+        self.height = dp(56)
+        self._items: list[BottomNavItem] = []
+        self._on_tab_select = on_tab_select
+        self._active_index = 0
+
+        # 背景
+        with self.canvas.before:
+            self._bg_color = Color(*hex_to_rgba(Theme.get("nav_bg")))
+            self._bg_rect = RoundedRectangle(pos=self.pos, size=self.size)
+            # 顶部分隔线
+            self._divider_color = Color(*hex_to_rgba(Theme.get("divider")))
+            self._divider_rect = RoundedRectangle(pos=self.pos, size=(self.width, dp(1)))
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
+        if items:
+            for i, item in enumerate(items):
+                nav_item = BottomNavItem(
+                    icon=item.get("icon", ""),
+                    label=item.get("label", ""),
+                    active=(i == 0),
+                )
+                nav_item.bind(on_release=lambda inst, idx=i: self._on_item_press(idx))
+                self._items.append(nav_item)
+                self.add_widget(nav_item)
+
+    def _update_bg(self, *args: Any) -> None:
+        self._bg_rect.pos = self.pos
+        self._bg_rect.size = self.size
+        self._divider_rect.pos = (self.x, self.top - dp(1))
+        self._divider_rect.size = (self.width, dp(1))
+
+    def _on_item_press(self, index: int) -> None:
+        """Tab 项被点击。"""
+        self.set_active(index)
+        if self._on_tab_select:
+            self._on_tab_select(index)
+
+    def set_active(self, index: int) -> None:
+        """设置当前激活的 Tab。"""
+        self._active_index = index
+        for i, item in enumerate(self._items):
+            item.active = (i == index)
+
+    def apply_theme(self) -> None:
+        """主题切换后刷新颜色。"""
+        self._bg_color.rgba = hex_to_rgba(Theme.get("nav_bg"))
+        self._divider_color.rgba = hex_to_rgba(Theme.get("divider"))
+        for item in self._items:
+            item._update_active()
+
+
+# ===========================================================================
+# 浮动操作按钮（FAB）
+# ===========================================================================
+
+class FloatingActionButton(ButtonBehavior, Label):
+    """Material Design 浮动操作按钮。
+
+    圆形主色按钮，通常悬浮在右下角。
+    """
+
+    bg_color = ColorProperty("#1976D2")
+    icon_text = StringProperty("+")
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.text = self.icon_text
+        self.font_size = sp(24)
+        self.bold = True
+        self.color = hex_to_rgba("#FFFFFF")
+        self.size_hint = (None, None)
+        self.size = (dp(56), dp(56))
+        with self.canvas.before:
+            self._bg = Color(*hex_to_rgba(self.bg_color) if isinstance(self.bg_color, str) else self.bg_color)
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(28)])
+        self.bind(pos=self._update, size=self._update, bg_color=self._update_bg)
+
+    def _update(self, *args: Any) -> None:
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+
+    def _update_bg(self, *args: Any) -> None:
+        color = self.bg_color
+        if isinstance(color, str):
+            color = hex_to_rgba(color)
+        self._bg.rgba = color
+
+    def on_state(self, widget: Widget, value: str) -> None:
+        if value == "down":
+            self._bg.rgba = [c * 0.85 for c in self._bg.rgba[:3]] + [self._bg.rgba[3]]
+        else:
+            self._update_bg()
+
+
+# ===========================================================================
 # 圆角按钮
 # ===========================================================================
 
@@ -124,7 +339,7 @@ class MaterialButton(ButtonBehavior, Label):
     支持自定义背景色、文字颜色、圆角半径，以及按下时的颜色加深效果。
     """
 
-    bg_color = ColorProperty("#2196F3")
+    bg_color = ColorProperty("#1976D2")
     text_color = ColorProperty("#FFFFFF")
     radius = NumericProperty(dp(8))
     font_size = NumericProperty(sp(15))
@@ -159,6 +374,52 @@ class MaterialButton(ButtonBehavior, Label):
         else:
             if self._original_bg:
                 self._bg_instruction.rgba = self._original_bg
+
+
+# ===========================================================================
+# 次要按钮（透明背景 + 主色文字 + 边框）
+# ===========================================================================
+
+class OutlinedButton(ButtonBehavior, Label):
+    """Material Design 次要按钮（描边样式）。
+
+    透明背景、主色文字、主色边框。
+    """
+
+    text_color = ColorProperty("#1976D2")
+    border_color = ColorProperty("#1976D2")
+    radius = NumericProperty(dp(8))
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.markup = True
+        self.size_hint_y = None
+        self.height = dp(44)
+        self.font_size = sp(15)
+        with self.canvas.before:
+            self._bg = Color(0, 0, 0, 0)
+            self._bg_rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[self.radius])
+            self._border = Color(*hex_to_rgba(self.border_color) if isinstance(self.border_color, str) else self.border_color)
+            self._border_rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[self.radius])
+        self.bind(pos=self._update, size=self._update, border_color=self._update_border)
+
+    def _update(self, *args: Any) -> None:
+        self._bg_rect.pos = self.pos
+        self._bg_rect.size = self.size
+        self._border_rect.pos = self.pos
+        self._border_rect.size = self.size
+
+    def _update_border(self, *args: Any) -> None:
+        color = self.border_color
+        if isinstance(color, str):
+            color = hex_to_rgba(color)
+        self._border.rgba = color
+
+    def on_state(self, widget: Widget, value: str) -> None:
+        if value == "down":
+            self._bg.rgba = hex_to_rgba(self.border_color if isinstance(self.border_color, str) else "#1976D2", 0.1)
+        else:
+            self._bg.rgba = [0, 0, 0, 0]
 
 
 # ===========================================================================
@@ -210,7 +471,7 @@ class CardWidget(BoxLayout):
     用作文件列表项、下载任务卡片等的基类。
     """
 
-    radius = NumericProperty(dp(10))
+    radius = NumericProperty(dp(12))
     card_color = StringProperty("#FFFFFF")
 
     def __init__(self, **kwargs: Any) -> None:
@@ -246,7 +507,7 @@ class ThemedProgressBar(ProgressBar):
     支持设置进度颜色和背景颜色，圆角显示。
     """
 
-    progress_color = StringProperty("#2196F3")
+    progress_color = StringProperty("#1976D2")
     track_color = StringProperty("#E0E0E0")
 
     def __init__(self, **kwargs: Any) -> None:
@@ -401,7 +662,7 @@ class DownloadTaskCard(CardWidget):
     """下载任务卡片。
 
     显示文件名、进度条、百分比、速度、已下载/总大小、状态标签，
-    以及暂停 / 恢复 / 取消按钮。
+    以及暂停 / 恢复 / 取消 / 删除按钮。
     """
 
     task_id = StringProperty("")
@@ -421,7 +682,7 @@ class DownloadTaskCard(CardWidget):
     }
     STATUS_COLOR = {
         "waiting": "#9E9E9E",
-        "downloading": "#2196F3",
+        "downloading": "#1976D2",
         "paused": "#FF9800",
         "completed": "#4CAF50",
         "error": "#F44336",
@@ -431,7 +692,7 @@ class DownloadTaskCard(CardWidget):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.size_hint_y = None
-        self.height = dp(130)
+        self.height = dp(140)
 
         # 第一行：文件名 + 状态
         header = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(24))
@@ -509,8 +770,17 @@ class DownloadTaskCard(CardWidget):
             height=dp(32),
         )
         self.cancel_btn.bind(on_release=self._on_cancel)
+        self.delete_btn = MaterialButton(
+            text="删除",
+            bg_color="#9E9E9E",
+            font_size=sp(13),
+            height=dp(32),
+            disabled=True,
+        )
+        self.delete_btn.bind(on_release=self._on_delete)
         btn_row.add_widget(self.pause_btn)
         btn_row.add_widget(self.cancel_btn)
+        btn_row.add_widget(self.delete_btn)
         self.add_widget(btn_row)
 
         # 绑定属性更新
@@ -544,14 +814,17 @@ class DownloadTaskCard(CardWidget):
             self.pause_btn.bg_color = "#FF9800"
             self.pause_btn.disabled = False
             self.cancel_btn.disabled = False
+            self.delete_btn.disabled = True
         elif self.status == "paused":
             self.pause_btn.text = "恢复"
             self.pause_btn.bg_color = "#4CAF50"
             self.pause_btn.disabled = False
             self.cancel_btn.disabled = False
+            self.delete_btn.disabled = True
         elif self.status in ("completed", "error", "canceled"):
             self.pause_btn.disabled = True
             self.cancel_btn.disabled = True
+            self.delete_btn.disabled = False
 
     def _on_pause(self, instance: Any) -> None:
         """暂停 / 恢复按钮回调。"""
@@ -569,6 +842,22 @@ class DownloadTaskCard(CardWidget):
         app = self.get_app_instance()
         if app and self.task_id:
             app.core.cancel_task(self.task_id)
+
+    def _on_delete(self, instance: Any) -> None:
+        """删除已完成/出错/取消的任务。"""
+        app = self.get_app_instance()
+        if app and self.task_id:
+            app.core.remove_task(self.task_id)
+            # 从父布局移除
+            parent = self.parent
+            if parent:
+                parent.remove_widget(self)
+            # 通知下载屏幕刷新
+            if hasattr(app, 'root') and app.root:
+                # 通过 ScreenManager 找到 download screen
+                sm = app.root if hasattr(app.root, 'get_screen') else None
+                if sm and sm.has_screen("download"):
+                    sm.get_screen("download")._task_cards.pop(self.task_id, None)
 
     def get_app_instance(self) -> Any:
         """获取 App 实例（通过 Window 遍历）。"""
@@ -621,3 +910,43 @@ def show_toast(parent: Widget, message: str, duration: float = 2.0) -> None:
     """便捷函数：在父控件中显示 Toast。"""
     toast = Toast(message)
     toast.show(parent, duration)
+
+
+# ===========================================================================
+# 加载旋转指示器
+# ===========================================================================
+
+class LoadingSpinner(Widget):
+    """旋转加载指示器（Material Design Circular Progress）。
+
+    使用 Canvas 绘制圆弧并旋转动画。
+    """
+
+    def __init__(self, color: str = "#1976D2", size: int = 32, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.size_hint = (None, None)
+        self.size = (dp(size), dp(size))
+        self._angle = 0
+        self._color = color
+        with self.canvas:
+            self._arc_color = Color(*hex_to_rgba(color))
+            from kivy.graphics import Line
+            self._arc = Line(circle=(self.center_x, self.center_y, dp(size/2 - 2), 0, 270), width=dp(3))
+        self.bind(pos=self._update, size=self._update)
+        self._anim = Animation()
+        self._start_rotation()
+
+    def _update(self, *args: Any) -> None:
+        self._arc.circle = (self.center_x, self.center_y, self.width / 2 - dp(2), self._angle, self._angle + 270)
+
+    def _start_rotation(self) -> None:
+        """启动旋转动画。"""
+        def _rotate(dt: float) -> None:
+            self._angle = (self._angle + 12) % 360
+            self._update()
+        self._event = Clock.schedule_interval(_rotate, 1 / 30)
+
+    def stop(self) -> None:
+        """停止旋转动画。"""
+        if hasattr(self, '_event'):
+            self._event.cancel()

@@ -3,13 +3,15 @@ YunX 移动端主应用类。
 
 负责：
 - Kivy App 生命周期管理
-- ScreenManager 屏幕管理（主屏幕 / 下载屏幕 / 设置屏幕 / 账号屏幕）
+- 底部导航栏（Bottom Navigation）+ ScreenManager 屏幕管理
+- 四个 Tab：解析 / 下载 / 账号 / 设置
 - 核心引擎适配器（CoreAdapter）的全局实例
 - 应用级设置读写（下载目录、并发数、主题等）
 - 下载任务 ID 集中管理与更新通知
 - 中文字体配置
 - Android 运行时权限请求
 - 主题切换应用
+- 配置导出 / 导入
 
 所有 UI 更新均在主线程执行；耗时操作通过 CoreAdapter 在子线程完成。
 """
@@ -24,6 +26,7 @@ from kivy.app import App
 from kivy.core.text import LabelBase
 from kivy.core.window import Window
 from kivy.metrics import dp
+from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.screenmanager import ScreenManager, SlideTransition
 from kivy.utils import platform as kivy_platform
 
@@ -32,7 +35,7 @@ from mobile_gui.ui.account_screen import AccountScreen
 from mobile_gui.ui.download_screen import DownloadScreen
 from mobile_gui.ui.main_screen import MainScreen
 from mobile_gui.ui.settings_screen import SettingsScreen
-from mobile_gui.ui.widgets import Theme
+from mobile_gui.ui.widgets import BottomNavigationBar, Theme, hex_to_rgba
 
 
 # ===========================================================================
@@ -86,13 +89,16 @@ def register_chinese_font() -> None:
 
 
 # ===========================================================================
-# 自定义 ScreenManager（携带主题模式）
+# 底部导航 Tab 定义
 # ===========================================================================
 
-class YunXScreenManager(ScreenManager):
-    """带主题模式属性的 ScreenManager。"""
-
-    theme_mode: str = "light"
+# Tab 顺序与 ScreenManager 中屏幕的对应关系
+NAV_TABS = [
+    {"icon": "🔍", "label": "解析", "screen": "main"},
+    {"icon": "⬇️", "label": "下载", "screen": "download"},
+    {"icon": "👤", "label": "账号", "screen": "account"},
+    {"icon": "⚙️", "label": "设置", "screen": "settings"},
+]
 
 
 # ===========================================================================
@@ -103,6 +109,7 @@ class YunXApp(App):
     """YunX 移动端主应用。
 
     使用 Kivy 2.x API，支持 Android + iOS。
+    布局：BoxLayout(vertical) = ScreenManager + BottomNavigationBar
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -110,13 +117,17 @@ class YunXApp(App):
         self.core: CoreAdapter | None = None
         self._download_task_ids: list[str] = []
         self._settings_cache: dict[str, Any] = {}
+        # 底部导航相关引用
+        self._screen_manager: ScreenManager | None = None
+        self._bottom_nav: BottomNavigationBar | None = None
+        self._root_layout: BoxLayout | None = None
 
     # ------------------------------------------------------------------
     # Kivy 生命周期
     # ------------------------------------------------------------------
 
-    def build(self) -> ScreenManager:
-        """构建应用界面。"""
+    def build(self) -> BoxLayout:
+        """构建应用界面：底部导航栏 + ScreenManager。"""
         # 注册中文字体
         register_chinese_font()
 
@@ -131,18 +142,33 @@ class YunXApp(App):
         if kivy_platform in ("win", "linux", "macosx"):
             Window.size = (dp(390), dp(700))
 
+        # 根布局：垂直排列（内容区 + 底部导航）
+        root = BoxLayout(orientation="vertical")
+        self._root_layout = root
+
         # 创建 ScreenManager
-        sm = YunXScreenManager(transition=SlideTransition(duration=0.2))
-        sm.theme_mode = theme_mode
+        sm = ScreenManager(transition=SlideTransition(duration=0.2))
+        self._screen_manager = sm
 
         # 添加四个屏幕
         sm.add_widget(MainScreen(name="main"))
         sm.add_widget(DownloadScreen(name="download"))
-        sm.add_widget(SettingsScreen(name="settings"))
         sm.add_widget(AccountScreen(name="account"))
-
+        sm.add_widget(SettingsScreen(name="settings"))
         sm.current = "main"
-        return sm
+
+        # 创建底部导航栏
+        nav = BottomNavigationBar(
+            items=NAV_TABS,
+            on_tab_select=self._on_tab_select,
+        )
+        self._bottom_nav = nav
+
+        # 组装：ScreenManager 占满剩余空间，底部导航固定高度
+        root.add_widget(sm)
+        root.add_widget(nav)
+
+        return root
 
     def on_start(self) -> None:
         """应用启动完成。"""
@@ -158,6 +184,38 @@ class YunXApp(App):
         # 暂停所有下载任务
         if self.core:
             self.core.pause_all()
+
+    # ------------------------------------------------------------------
+    # 底部导航
+    # ------------------------------------------------------------------
+
+    def _on_tab_select(self, index: int) -> None:
+        """底部导航 Tab 被点击。"""
+        if 0 <= index < len(NAV_TABS):
+            screen_name = NAV_TABS[index]["screen"]
+            if self._screen_manager:
+                self._screen_manager.current = screen_name
+
+    def switch_tab(self, screen_name: str) -> None:
+        """编程式切换到指定 Tab。
+
+        Args:
+            screen_name: 屏幕名称（main / download / account / settings）。
+        """
+        if self._screen_manager:
+            self._screen_manager.current = screen_name
+        # 同步底部导航高亮
+        if self._bottom_nav:
+            for i, tab in enumerate(NAV_TABS):
+                if tab["screen"] == screen_name:
+                    self._bottom_nav.set_active(i)
+                    break
+
+    def get_screen(self, name: str) -> Any:
+        """获取指定屏幕实例。"""
+        if self._screen_manager and self._screen_manager.has_screen(name):
+            return self._screen_manager.get_screen(name)
+        return None
 
     # ------------------------------------------------------------------
     # 设置管理（内存缓存 + 持久化）
@@ -195,16 +253,14 @@ class YunXApp(App):
 
     def notify_download_update(self, task: Any) -> None:
         """通知下载屏幕更新任务进度。"""
-        sm = self.root
-        if sm and sm.has_screen("download"):
-            download_screen = sm.get_screen("download")
+        download_screen = self.get_screen("download")
+        if download_screen:
             download_screen.update_task_card(task)
 
     def _notify_download_screen(self, task_id: str) -> None:
         """通知下载屏幕添加新任务卡片。"""
-        sm = self.root
-        if sm and sm.has_screen("download"):
-            download_screen = sm.get_screen("download")
+        download_screen = self.get_screen("download")
+        if download_screen:
             download_screen.add_task_card(task_id)
 
     # ------------------------------------------------------------------
@@ -212,17 +268,61 @@ class YunXApp(App):
     # ------------------------------------------------------------------
 
     def apply_theme(self, mode: str) -> None:
-        """应用主题到所有屏幕。"""
+        """应用主题到所有屏幕和底部导航。"""
         Theme.set_mode(mode)
-        sm = self.root
-        if isinstance(sm, YunXScreenManager):
-            sm.theme_mode = mode
-        # 通知各屏幕刷新（通过 on_pre_enter 时自动读取）
+        # 底部导航刷新颜色
+        if self._bottom_nav:
+            self._bottom_nav.apply_theme()
+        # 根布局背景刷新
+        if self._root_layout:
+            # 通知各屏幕在 on_pre_enter 时自动读取
+            pass
         # 当前屏幕立即刷新背景
-        current = sm.current_screen if sm else None
-        if current and hasattr(current, "_bg_color"):
-            from mobile_gui.ui.widgets import hex_to_rgba
-            current._bg_color.rgba = hex_to_rgba(Theme.get("bg"))
+        if self._screen_manager:
+            current = self._screen_manager.current_screen
+            if current and hasattr(current, "_bg_color"):
+                current._bg_color.rgba = hex_to_rgba(Theme.get("bg"))
+
+    # ------------------------------------------------------------------
+    # 配置导出 / 导入（应用级便捷方法）
+    # ------------------------------------------------------------------
+
+    def get_default_export_path(self) -> str:
+        """获取默认的配置导出路径。
+
+        优先使用下载目录，其次使用应用文档目录。
+        """
+        download_dir = self.get_setting("download_dir", CoreAdapter.default_download_dir())
+        try:
+            os.makedirs(download_dir, exist_ok=True)
+        except OSError:
+            download_dir = os.path.expanduser("~")
+        return os.path.join(download_dir, "yunx_config.yunxcfg")
+
+    def export_config(
+        self,
+        output_path: str,
+        password: str | None = None,
+        include_tasks: bool = True,
+    ) -> str:
+        """导出配置（委托给 CoreAdapter）。"""
+        if not self.core:
+            raise RuntimeError("核心适配器未初始化")
+        return self.core.export_config(output_path, password, include_tasks)
+
+    def import_config(
+        self,
+        input_path: str,
+        password: str | None = None,
+        merge: bool = True,
+    ) -> dict[str, int]:
+        """导入配置（委托给 CoreAdapter）。"""
+        if not self.core:
+            raise RuntimeError("核心适配器未初始化")
+        result = self.core.import_config(input_path, password, merge)
+        # 导入后清除设置缓存，强制重新读取
+        self._settings_cache.clear()
+        return result
 
     # ------------------------------------------------------------------
     # Android 权限
@@ -264,9 +364,8 @@ class YunXApp(App):
             share = results[0]
             info = CoreAdapter.drive_display(share.drive)
             # 在主屏幕填入 URL
-            sm = self.root
-            if sm and sm.has_screen("main"):
-                main_screen = sm.get_screen("main")
+            main_screen = self.get_screen("main")
+            if main_screen:
                 main_screen._url_input.text = share.url
                 if share.extract_code:
                     main_screen._code_input.text = share.extract_code

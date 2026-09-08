@@ -13,6 +13,12 @@ from .exceptions import (
     BaiduRiskWarning,
     AuthenticationError,
 )
+from .config_export import (
+    export_config,
+    import_config,
+    is_encrypted,
+    apply_imported_config,
+)
 
 __all__ = [
     "YunXError",
@@ -21,6 +27,10 @@ __all__ = [
     "DownloadError",
     "BaiduRiskWarning",
     "AuthenticationError",
+    "export_config",
+    "import_config",
+    "is_encrypted",
+    "apply_imported_config",
 ]
 
 __version__ = "0.1.0"

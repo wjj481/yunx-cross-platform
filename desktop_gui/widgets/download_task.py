@@ -152,9 +152,34 @@ class DownloadTaskWidget(ttk.Frame):
         self._cancel_btn = ttk.Button(
             btn_frame, text="取消", command=self._handle_cancel, state=tk.DISABLED
         )
-        self._cancel_btn.pack(side=tk.LEFT)
+        self._cancel_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        # 打开文件位置按钮（仅已完成时显示）
+        self._open_btn = ttk.Button(
+            btn_frame, text="打开位置", command=self._handle_open_location,
+            state=tk.DISABLED,
+        )
+        self._open_btn.pack(side=tk.LEFT)
 
     # ---------- 公共方法 ----------
+
+    def _reparent(self, new_master: tk.Misc) -> None:
+        """将组件重新挂载到新的父容器（用于卡片布局）。
+
+        Args:
+            new_master: 新的父容器。
+        """
+        # 保存当前所有子组件，重新创建到新父容器
+        # tkinter 不支持直接 reparent，因此通过重建方式
+        self._card_master = new_master
+        # 重新 pack 到新容器
+        self.pack_forget()
+        self.master = new_master
+
+    @property
+    def output_path(self) -> str:
+        """输出文件完整路径。"""
+        return os.path.join(self._output_dir, self._file_name)
 
     def start(self) -> None:
         """启动下载任务（在子线程中运行）。"""
@@ -307,6 +332,7 @@ class DownloadTaskWidget(ttk.Frame):
             self._pause_btn.config(state=tk.DISABLED)
             self._resume_btn.config(state=tk.DISABLED)
             self._cancel_btn.config(state=tk.DISABLED)
+            self._open_btn.config(state=tk.NORMAL)
             self._status_label.config(text=STATUS_COMPLETED, foreground="#2E7D32")
             self._speed_label.config(text="完成")
             self._progress["value"] = 100
@@ -315,9 +341,12 @@ class DownloadTaskWidget(ttk.Frame):
             self._pause_btn.config(state=tk.DISABLED)
             self._resume_btn.config(state=tk.DISABLED)
             self._cancel_btn.config(state=tk.DISABLED)
+            self._open_btn.config(state=tk.DISABLED)
             color = "#C62828" if self._status == STATUS_ERROR else "#666"
             self._status_label.config(text=self._status, foreground=color)
             self._speed_label.config(text="—")
+        else:
+            self._open_btn.config(state=tk.DISABLED)
 
     def _set_status(self, status: str, message: str = "") -> None:
         """设置任务状态（主线程调用）。"""
@@ -352,3 +381,27 @@ class DownloadTaskWidget(ttk.Frame):
         if self._on_remove:
             # 延迟移除，给取消操作一点时间
             self.after(200, lambda: self._on_remove(self))
+
+    def _handle_open_location(self) -> None:
+        """打开文件所在目录（跨平台）。"""
+        import subprocess
+        import sys
+
+        output_dir = self._output_dir
+        if not os.path.isdir(output_dir):
+            return
+
+        try:
+            if sys.platform == "win32":
+                # Windows: 打开目录并选中文件
+                file_path = os.path.join(output_dir, self._file_name)
+                if os.path.exists(file_path):
+                    subprocess.Popen(["explorer", "/select,", file_path])
+                else:
+                    os.startfile(output_dir)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", output_dir])
+            else:
+                subprocess.Popen(["xdg-open", output_dir])
+        except Exception:
+            pass  # 静默失败

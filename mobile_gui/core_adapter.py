@@ -236,6 +236,92 @@ class CoreAdapter:
         self._config.remove_credential(drive)
 
     # ------------------------------------------------------------------
+    # 配置导出 / 导入
+    # ------------------------------------------------------------------
+
+    def export_config(
+        self,
+        output_path: str,
+        password: str | None = None,
+        include_tasks: bool = True,
+    ) -> str:
+        """导出配置到文件。
+
+        Args:
+            output_path: 输出文件路径（.yunxcfg）。
+            password: 加密密码；None 表示明文导出。
+            include_tasks: 是否包含已保存下载任务。
+
+        Returns:
+            实际写入的文件路径。
+
+        Raises:
+            RuntimeError: 配置管理器未初始化。
+        """
+        if self._config is None:
+            raise RuntimeError("配置管理器未初始化，无法导出")
+        from core import export_config as _export_config
+        result = _export_config(
+            self._config,
+            output_path,
+            password=password,
+            include_tasks=include_tasks,
+        )
+        return str(result)
+
+    def is_config_encrypted(self, input_path: str) -> bool:
+        """检测配置文件是否为加密格式。
+
+        Args:
+            input_path: 配置文件路径。
+
+        Returns:
+            True 表示加密文件。
+        """
+        from core import is_encrypted as _is_encrypted
+        return _is_encrypted(input_path)
+
+    def import_config(
+        self,
+        input_path: str,
+        password: str | None = None,
+        merge: bool = True,
+    ) -> dict[str, int]:
+        """导入配置文件并应用到当前配置。
+
+        Args:
+            input_path: 配置文件路径（.yunxcfg）。
+            password: 解密密码；明文文件可省略。
+            merge: True=合并模式，False=完全替换。
+
+        Returns:
+            包含 credentials / settings / tasks 数量的字典。
+
+        Raises:
+            RuntimeError: 配置管理器未初始化。
+            AuthenticationError: 加密文件密码错误。
+            ValueError: 文件格式不完整。
+        """
+        if self._config is None:
+            raise RuntimeError("配置管理器未初始化，无法导入")
+        from core import import_config as _import_config
+        from core import apply_imported_config as _apply
+
+        imported_data = _import_config(input_path, password=password)
+        _apply(self._config, imported_data, merge=merge)
+
+        # 返回摘要
+        return {
+            "credentials": len(imported_data.get("credentials", {})),
+            "settings": len(imported_data.get("settings", {})),
+            "tasks": len(imported_data.get("tasks", [])),
+        }
+
+    def get_config_manager(self) -> Any:
+        """获取内部 ConfigManager 实例（供高级操作使用）。"""
+        return self._config
+
+    # ------------------------------------------------------------------
     # 网盘信息
     # ------------------------------------------------------------------
 

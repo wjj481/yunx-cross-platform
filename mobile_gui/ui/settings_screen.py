@@ -1,13 +1,11 @@
 """
-设置屏幕（SettingsScreen）。
+设置屏幕（设置 Tab）。
 
 功能：
-- 下载目录设置
-- 并发数设置（1-32 滑块）
-- 分片大小选择
-- 剪贴板监听开关
-- 主题切换（浅色/深色）
-- 关于/免责声明
+- 下载设置：下载目录、并发数(1-32滑块)、分片大小(1/2/4/8/16MB)、剪贴板监听开关
+- 外观：主题切换（浅色/深色）
+- 配置管理：导出配置 + 导入配置 按钮
+- 关于：版本号、协议、免责声明、GitHub链接
 """
 
 from __future__ import annotations
@@ -25,12 +23,17 @@ from kivy.uix.switch import Switch
 from kivy.uix.textinput import TextInput
 
 from mobile_gui.core_adapter import CoreAdapter
-from mobile_gui.ui.dialogs import ConfirmDialog
+from mobile_gui.ui.dialogs import (
+    ErrorDialog,
+    ExportConfigDialog,
+    ImportConfigDialog,
+    ImportResultDialog,
+)
 from mobile_gui.ui.widgets import MaterialButton, Theme, hex_to_rgba, show_toast
 
 
 class SettingsScreen(Screen):
-    """设置屏幕：下载配置、主题、关于。"""
+    """设置屏幕：下载配置、主题、配置管理、关于。"""
 
     # 分片大小选项
     CHUNK_OPTIONS = [
@@ -61,19 +64,12 @@ class SettingsScreen(Screen):
             orientation="horizontal",
             size_hint_y=None,
             height=dp(56),
-            padding=[dp(8), 0],
+            padding=[dp(16), 0],
             spacing=dp(8),
         )
         with top_bar.canvas.before:
-            Color(*hex_to_rgba("#2196F3"))
+            Color(*hex_to_rgba("#1976D2"))
             RoundedRectangle(pos=top_bar.pos, size=top_bar.size)
-
-        back_btn = MaterialButton(
-            text="←", bg_color="#1976D2",
-            size_hint=(None, None), size=(dp(40), dp(40)),
-            font_size=sp(20), radius=dp(20),
-        )
-        back_btn.bind(on_release=self._go_back)
 
         title = Label(
             text="[b]设置[/b]", markup=True,
@@ -81,7 +77,6 @@ class SettingsScreen(Screen):
             halign="left", valign="middle",
         )
         title.bind(size=title.setter("text_size"))
-        top_bar.add_widget(back_btn)
         top_bar.add_widget(title)
         root.add_widget(top_bar)
 
@@ -99,7 +94,7 @@ class SettingsScreen(Screen):
         content_box.add_widget(self._section_title("下载设置"))
 
         # 下载目录
-        dir_card = self._make_card(dp(100))
+        dir_card = self._make_card(dp(110))
         dir_label = Label(
             text="下载目录", font_size=sp(14), bold=True,
             halign="left", size_hint_y=None, height=dp(20),
@@ -111,7 +106,7 @@ class SettingsScreen(Screen):
             font_size=sp(13),
             background_color=hex_to_rgba(Theme.get("input_bg")),
             foreground_color=hex_to_rgba(Theme.get("text")),
-            cursor_color=hex_to_rgba("#2196F3"),
+            cursor_color=hex_to_rgba("#1976D2"),
             padding=[dp(8), dp(8)],
         )
         save_dir_btn = MaterialButton(
@@ -137,7 +132,7 @@ class SettingsScreen(Screen):
         self._concurrency_value = Label(
             text="8", font_size=sp(14), bold=True,
             size_hint=(None, None), size=(dp(40), dp(24)),
-            color=hex_to_rgba("#2196F3"),
+            color=hex_to_rgba("#1976D2"),
         )
         concurrency_header.add_widget(concurrency_label)
         concurrency_header.add_widget(self._concurrency_value)
@@ -217,13 +212,51 @@ class SettingsScreen(Screen):
         theme_card.add_widget(theme_row)
         content_box.add_widget(theme_card)
 
+        # -- 配置管理 --
+        content_box.add_widget(self._section_title("配置管理"))
+
+        config_card = self._make_card(dp(130))
+        config_desc = Label(
+            text="导出 / 导入配置文件（.yunxcfg），可在设备间迁移凭证和设置",
+            font_size=sp(11),
+            color=hex_to_rgba("#757575"),
+            halign="left",
+            size_hint_y=None,
+            height=dp(30),
+        )
+        config_desc.bind(size=config_desc.setter("text_size"))
+        config_card.add_widget(config_desc)
+
+        # 导出按钮
+        export_btn = MaterialButton(
+            text="📤 导出配置",
+            bg_color="#1976D2",
+            font_size=sp(14),
+            height=dp(40),
+        )
+        export_btn.bind(on_release=self._on_export_config)
+        config_card.add_widget(export_btn)
+
+        # 导入按钮
+        import_btn = MaterialButton(
+            text="📥 导入配置",
+            bg_color="#4CAF50",
+            font_size=sp(14),
+            height=dp(40),
+        )
+        import_btn.bind(on_release=self._on_import_config)
+        config_card.add_widget(import_btn)
+
+        content_box.add_widget(config_card)
+
         # -- 关于 --
         content_box.add_widget(self._section_title("关于"))
-        about_card = self._make_card(dp(140))
+        about_card = self._make_card(dp(160))
         about_text = (
-            "[b]YunX 云析 v0.1.0[/b]\n\n"
+            "[b]YunX 云析 v0.2.0[/b]\n\n"
             "跨平台网盘解析 + 高速下载工具\n"
             "支持：夸克、123云盘、迅雷、百度、UC、和彩云\n\n"
+            "[b]GitHub：[/b]github.com/yunx-project/yunx-cross-platform\n\n"
             "[b]免责声明：[/b]\n"
             "本工具仅供学习研究使用，请勿用于商业用途。\n"
             "使用本工具产生的一切后果由使用者自行承担。"
@@ -232,7 +265,7 @@ class SettingsScreen(Screen):
             text=about_text, markup=True,
             font_size=sp(12), halign="left", valign="top",
             color=hex_to_rgba(Theme.get("text_secondary")),
-            size_hint_y=None, height=dp(120),
+            size_hint_y=None, height=dp(140),
         )
         about_label.bind(size=about_label.setter("text_size"))
         about_card.add_widget(about_label)
@@ -252,7 +285,7 @@ class SettingsScreen(Screen):
             text=f"[b]{text}[/b]", markup=True,
             font_size=sp(15), bold=True,
             halign="left", size_hint_y=None, height=dp(28),
-            color=hex_to_rgba("#2196F3"),
+            color=hex_to_rgba("#1976D2"),
             padding=[dp(4), 0],
         )
         label.bind(size=label.setter("text_size"))
@@ -267,7 +300,7 @@ class SettingsScreen(Screen):
         )
         with card.canvas.before:
             Color(*hex_to_rgba(Theme.get("card")))
-            RoundedRectangle(pos=card.pos, size=card.size, radius=[dp(8)])
+            RoundedRectangle(pos=card.pos, size=card.size, radius=[dp(12)])
         return card
 
     def _update_bg(self, *args: Any) -> None:
@@ -300,7 +333,7 @@ class SettingsScreen(Screen):
         """选择分片大小。"""
         self._chunk_index = index
         for i, btn in enumerate(self._chunk_buttons):
-            btn.bg_color = "#2196F3" if i == index else "#BDBDBD"
+            btn.bg_color = "#1976D2" if i == index else "#BDBDBD"
         _, chunk_size = self.CHUNK_OPTIONS[index]
         from kivy.app import App
         app = App.get_running_app()
@@ -321,6 +354,77 @@ class SettingsScreen(Screen):
         app.set_setting("theme", mode)
         app.apply_theme(mode)
         show_toast(self, f"已切换为{'深色' if value else '浅色'}主题")
+
+    # ------------------------------------------------------------------
+    # 配置导出 / 导入
+    # ------------------------------------------------------------------
+
+    def _on_export_config(self, *args: Any) -> None:
+        """导出配置按钮回调。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        default_path = app.get_default_export_path()
+
+        dialog = ExportConfigDialog(
+            default_path=default_path,
+            on_export=self._do_export,
+        )
+        dialog.open()
+
+    def _do_export(self, output_path: str, password: str | None, include_tasks: bool) -> None:
+        """执行导出。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        try:
+            result_path = app.export_config(output_path, password, include_tasks)
+            mode_text = "加密" if password else "明文"
+            show_toast(self, f"配置已{mode_text}导出：{result_path}", duration=3.0)
+        except Exception as exc:
+            ErrorDialog(
+                title="导出失败",
+                message=str(exc),
+            ).open()
+
+    def _on_import_config(self, *args: Any) -> None:
+        """导入配置按钮回调。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        default_dir = app.get_setting("download_dir", CoreAdapter.default_download_dir())
+
+        dialog = ImportConfigDialog(
+            default_dir=default_dir,
+            on_import=self._do_import,
+        )
+        dialog.open()
+
+    def _do_import(self, file_path: str, password: str | None, merge: bool) -> None:
+        """执行导入。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        try:
+            result = app.import_config(file_path, password, merge)
+            # 显示导入结果摘要
+            ImportResultDialog(
+                credentials_count=result.get("credentials", 0),
+                settings_count=result.get("settings", 0),
+                tasks_count=result.get("tasks", 0),
+                on_ok=self._after_import,
+            ).open()
+        except Exception as exc:
+            ErrorDialog(
+                title="导入失败",
+                message=str(exc),
+            ).open()
+
+    def _after_import(self) -> None:
+        """导入完成后刷新相关屏幕。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        # 刷新账号 Tab
+        account_screen = app.get_screen("account")
+        if account_screen:
+            account_screen.refresh_accounts()
+        show_toast(self, "配置导入完成，账号和设置已更新")
 
     # ------------------------------------------------------------------
     # 屏幕生命周期
@@ -353,6 +457,3 @@ class SettingsScreen(Screen):
         # 主题
         theme = app.get_setting("theme", "light")
         self._theme_switch.active = theme == "dark"
-
-    def _go_back(self, *args: Any) -> None:
-        self.manager.current = "main"

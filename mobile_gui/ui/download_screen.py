@@ -1,11 +1,11 @@
 """
-下载屏幕（DownloadScreen）。
+下载屏幕（下载 Tab）。
 
 功能：
-- 下载任务列表（每个任务卡片显示文件名、进度条、百分比、速度、状态、控制按钮）
-- 顶部：返回按钮 + 「全部暂停」「全部恢复」
-- 空状态提示
-- 定时刷新任务进度
+- 顶部工具栏：全部暂停 / 全部恢复 / 清除已完成 / 总速度显示
+- 下载任务列表（任务卡片：文件名/进度条/百分比/速度/已下载/总大小/状态 + 暂停/继续/取消/删除按钮）
+- 空状态：大图标 + "暂无下载任务" + "去解析页添加下载"引导按钮
+- 0.5 秒定时刷新进度
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from mobile_gui.ui.widgets import (
     MaterialButton,
     Theme,
     hex_to_rgba,
+    show_toast,
 )
 
 
@@ -36,7 +37,7 @@ class DownloadScreen(Screen):
         super().__init__(**kwargs)
         self.name = "download"
         self._task_cards: dict[str, DownloadTaskCard] = {}
-        self._refresh_event: ClockEvent | None = None  # type: ignore[name-defined]
+        self._refresh_event: Any = None
 
         self._build_ui()
 
@@ -53,28 +54,19 @@ class DownloadScreen(Screen):
             self._bg_rect = RoundedRectangle(pos=root.pos, size=root.size)
         root.bind(pos=self._update_bg, size=self._update_bg)
 
-        # 顶部栏
+        # 顶部工具栏
         top_bar = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
             height=dp(56),
             padding=[dp(8), 0],
-            spacing=dp(8),
+            spacing=dp(6),
         )
         with top_bar.canvas.before:
-            Color(*hex_to_rgba("#2196F3"))
+            Color(*hex_to_rgba("#1976D2"))
             RoundedRectangle(pos=top_bar.pos, size=top_bar.size)
 
-        back_btn = MaterialButton(
-            text="←",
-            bg_color="#1976D2",
-            size_hint=(None, None),
-            size=(dp(40), dp(40)),
-            font_size=sp(20),
-            radius=dp(20),
-        )
-        back_btn.bind(on_release=self._go_back)
-
+        # 标题
         title = Label(
             text="[b]下载管理[/b]",
             markup=True,
@@ -82,31 +74,55 @@ class DownloadScreen(Screen):
             color=hex_to_rgba("#FFFFFF"),
             halign="left",
             valign="middle",
+            size_hint_x=0.3,
         )
         title.bind(size=title.setter("text_size"))
+        top_bar.add_widget(title)
 
-        self._pause_all_btn = MaterialButton(
-            text="全部暂停",
-            bg_color="#FF9800",
-            size_hint=(None, None),
-            size=(dp(80), dp(36)),
+        # 总速度
+        self._speed_label = Label(
+            text="0 B/s",
             font_size=sp(12),
+            color=hex_to_rgba("#BBDEFB"),
+            halign="right",
+            valign="middle",
+            size_hint_x=0.25,
+        )
+        top_bar.add_widget(self._speed_label)
+
+        # 全部暂停
+        self._pause_all_btn = MaterialButton(
+            text="⏸ 全部暂停",
+            bg_color="#FF9800",
+            size_hint_x=0.22,
+            font_size=sp(11),
+            height=dp(36),
         )
         self._pause_all_btn.bind(on_release=self._pause_all)
+        top_bar.add_widget(self._pause_all_btn)
 
+        # 全部恢复
         self._resume_all_btn = MaterialButton(
-            text="全部恢复",
+            text="▶ 全部恢复",
             bg_color="#4CAF50",
-            size_hint=(None, None),
-            size=(dp(80), dp(36)),
-            font_size=sp(12),
+            size_hint_x=0.22,
+            font_size=sp(11),
+            height=dp(36),
         )
         self._resume_all_btn.bind(on_release=self._resume_all)
-
-        top_bar.add_widget(back_btn)
-        top_bar.add_widget(title)
-        top_bar.add_widget(self._pause_all_btn)
         top_bar.add_widget(self._resume_all_btn)
+
+        # 清除已完成
+        self._clear_btn = MaterialButton(
+            text="🗑 清除",
+            bg_color="#78909C",
+            size_hint_x=0.18,
+            font_size=sp(11),
+            height=dp(36),
+        )
+        self._clear_btn.bind(on_release=self._clear_completed)
+        top_bar.add_widget(self._clear_btn)
+
         root.add_widget(top_bar)
 
         # 任务列表（可滚动）
@@ -121,15 +137,42 @@ class DownloadScreen(Screen):
         self._scroll.add_widget(self._task_list)
         root.add_widget(self._scroll)
 
-        # 空状态提示
-        self._empty_label = Label(
-            text="暂无下载任务\n在主屏幕解析链接后点击「下载选中」",
+        # 空状态（覆盖在列表上方）
+        self._empty_box = BoxLayout(
+            orientation="vertical",
+            size_hint=(1, 1),
+            spacing=dp(16),
+            padding=dp(40),
+            opacity=1,
+        )
+        empty_icon = Label(
+            text="📥",
+            size_hint_y=None,
+            height=dp(80),
+            font_size=sp(64),
+        )
+        empty_text = Label(
+            text="暂无下载任务\n在解析页解析链接后点击「下载选中」",
             font_size=sp(14),
             color=hex_to_rgba("#9E9E9E"),
             halign="center",
             valign="middle",
+            size_hint_y=None,
+            height=dp(50),
         )
-        root.add_widget(self._empty_label)
+        go_parse_btn = MaterialButton(
+            text="去解析页添加下载",
+            bg_color="#1976D2",
+            font_size=sp(14),
+            size_hint=(None, None),
+            size=(dp(200), dp(44)),
+            height=dp(44),
+        )
+        go_parse_btn.bind(on_release=self._go_parse)
+        self._empty_box.add_widget(empty_icon)
+        self._empty_box.add_widget(empty_text)
+        self._empty_box.add_widget(go_parse_btn)
+        root.add_widget(self._empty_box)
 
         self.add_widget(root)
 
@@ -163,7 +206,7 @@ class DownloadScreen(Screen):
         self._task_cards[task_id] = card
         self._task_list.add_widget(card)
         self._task_list.height += card.height + dp(8)
-        self._empty_label.opacity = 0
+        self._empty_box.opacity = 0
 
     def update_task_card(self, task: Any) -> None:
         """更新任务卡片进度。"""
@@ -182,6 +225,11 @@ class DownloadScreen(Screen):
         from kivy.app import App
         app = App.get_running_app()
         tasks = app.core.get_all_tasks()
+
+        # 计算总速度
+        total_speed = sum(t.speed for t in tasks if t.status == "downloading")
+        self._speed_label.text = f"总速 {CoreAdapter.format_speed(total_speed)}"
+
         for task in tasks:
             if task.task_id not in self._task_cards:
                 self.add_task_card(task.task_id)
@@ -190,9 +238,9 @@ class DownloadScreen(Screen):
 
         # 更新空状态
         if not tasks:
-            self._empty_label.opacity = 1
+            self._empty_box.opacity = 1
         else:
-            self._empty_label.opacity = 0
+            self._empty_box.opacity = 0
 
     # ------------------------------------------------------------------
     # 批量操作
@@ -204,6 +252,7 @@ class DownloadScreen(Screen):
         app = App.get_running_app()
         app.core.pause_all()
         self.refresh_all_tasks()
+        show_toast(self, "已暂停所有下载")
 
     def _resume_all(self, *args: Any) -> None:
         """恢复所有暂停的任务。"""
@@ -211,6 +260,36 @@ class DownloadScreen(Screen):
         app = App.get_running_app()
         app.core.resume_all()
         self.refresh_all_tasks()
+        show_toast(self, "已恢复所有下载")
+
+    def _clear_completed(self, *args: Any) -> None:
+        """清除所有已完成/已取消/出错的任务。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        tasks = app.core.get_all_tasks()
+        removed = 0
+        for task in tasks:
+            if task.status in ("completed", "canceled", "error"):
+                app.core.remove_task(task.task_id)
+                card = self._task_cards.pop(task.task_id, None)
+                if card and card.parent:
+                    card.parent.remove_widget(card)
+                removed += 1
+        self.refresh_all_tasks()
+        if removed > 0:
+            show_toast(self, f"已清除 {removed} 个任务")
+        else:
+            show_toast(self, "没有可清除的任务")
+
+    # ------------------------------------------------------------------
+    # 导航
+    # ------------------------------------------------------------------
+
+    def _go_parse(self, *args: Any) -> None:
+        """跳转到解析 Tab。"""
+        from kivy.app import App
+        app = App.get_running_app()
+        app.switch_tab("main")
 
     # ------------------------------------------------------------------
     # 屏幕生命周期
@@ -229,6 +308,3 @@ class DownloadScreen(Screen):
         if self._refresh_event:
             self._refresh_event.cancel()
             self._refresh_event = None
-
-    def _go_back(self, *args: Any) -> None:
-        self.manager.current = "main"
