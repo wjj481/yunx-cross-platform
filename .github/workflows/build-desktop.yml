@@ -6,10 +6,15 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
+  # ---------------- Windows ----------------
   build-windows:
     runs-on: windows-2022
     strategy:
+      fail-fast: false
       matrix:
         arch: [x64, x86]
     timeout-minutes: 60
@@ -35,38 +40,37 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller requests aiohttp cryptography
+          pip install pyinstaller mutagen
           pip install -r requirements-core.txt
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (spec)
         run: |
-          cd desktop_gui
-          pyinstaller --noconfirm --clean --onefile --windowed `
-            --name "YunX-${{ matrix.arch }}" `
-            --icon ../assets/icon.ico `
-            --add-data "../core;core" `
-            --hidden-import aiohttp `
-            --hidden-import cryptography `
-            main.py
+          pyinstaller --noconfirm --clean desktop_gui/desktop_gui.spec
         shell: pwsh
 
       - name: Package release
         run: |
           mkdir -p dist
-          $exe = Get-ChildItem -Path desktop_gui/dist -Filter *.exe | Select-Object -First 1
+          $exe = Get-ChildItem -Path dist -Filter "YunX.exe" -Recurse | Select-Object -First 1
           if ($exe) {
             Copy-Item $exe.FullName "dist/YunX-Windows-${{ matrix.arch }}-${{ github.ref_name }}.exe"
+          } else {
+            Write-Error "YunX.exe not found"
+            exit 1
           }
-          Get-FileHash "dist/YunX-Windows-${{ matrix.arch }}-${{ github.ref_name }}.exe" -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($_.Path.Split('\')[-1])" } | Out-File -Append "dist/SHA256SUMS.txt"
+          Get-FileHash "dist/YunX-Windows-${{ matrix.arch }}-${{ github.ref_name }}.exe" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  YunX-Windows-${{ matrix.arch }}-${{ github.ref_name }}.exe" } | Out-File -Append "dist/SHA256SUMS.txt"
         shell: pwsh
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          name: YunX-Windows-${{ matrix.arch }}
-          path: dist/
+          files: |
+            dist/YunX-Windows-${{ matrix.arch }}-${{ github.ref_name }}.exe
+        fail_on_unmatched_files: true
 
-  build-macos:
+  # ---------------- macOS arm64 (Apple Silicon) ----------------
+  build-macos-arm64:
     runs-on: macos-14
     timeout-minutes: 60
 
@@ -79,42 +83,90 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Verify tkinter
+        run: python -c "import tkinter; print('tkinter OK', tkinter.TkVersion)"
+
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install pyinstaller requests aiohttp cryptography
+          python -m pip install --upgrade pip
+          pip install pyinstaller mutagen
           pip install -r requirements-core.txt
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (spec)
         run: |
-          cd desktop_gui
-          pyinstaller --noconfirm --clean --onefile --windowed \
-            --name "YunX-macOS" \
-            --add-data "../core:core" \
-            --hidden-import aiohttp \
-            --hidden-import cryptography \
-            main.py
+          pyinstaller --noconfirm --clean desktop_gui/desktop_gui.spec
 
       - name: Package release
         run: |
           mkdir -p dist
-          if [ -f "desktop_gui/dist/YunX-macOS" ]; then
-            cp "desktop_gui/dist/YunX-macOS" "dist/YunX-macOS-${{ github.ref_name }}"
-            chmod +x "dist/YunX-macOS-${{ github.ref_name }}"
+          # PyInstaller onefile 产物
+          if [ -f "dist/YunX" ]; then
+            cp "dist/YunX" "dist/YunX-macOS-arm64-${{ github.ref_name }}"
+            chmod +x "dist/YunX-macOS-arm64-${{ github.ref_name }}"
+          else
+            echo "::error::dist/YunX not found"
+            ls -la dist/ || true
+            exit 1
           fi
-          if [ -d "desktop_gui/dist/YunX-macOS.app" ]; then
-            cd desktop_gui/dist
-            zip -r "../../dist/YunX-macOS-${{ github.ref_name }}.zip" "YunX-macOS.app"
-            cd ../..
-          fi
-          shasum -a 256 dist/* >> dist/SHA256SUMS.txt 2>/dev/null || true
+          shasum -a 256 "dist/YunX-macOS-arm64-${{ github.ref_name }}" | awk '{print tolower($1)"  "$2}' >> "dist/SHA256SUMS.txt"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          name: YunX-macOS
-          path: dist/
+          files: |
+            dist/YunX-macOS-arm64-${{ github.ref_name }}
+        fail_on_unmatched_files: true
 
+  # ---------------- macOS x86_64 (Intel) ----------------
+  build-macos-x86_64:
+    runs-on: macos-13
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify tkinter
+        run: python -c "import tkinter; print('tkinter OK', tkinter.TkVersion)"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller mutagen
+          pip install -r requirements-core.txt
+
+      - name: Build with PyInstaller (spec)
+        run: |
+          pyinstaller --noconfirm --clean desktop_gui/desktop_gui.spec
+
+      - name: Package release
+        run: |
+          mkdir -p dist
+          if [ -f "dist/YunX" ]; then
+            cp "dist/YunX" "dist/YunX-macOS-x86_64-${{ github.ref_name }}"
+            chmod +x "dist/YunX-macOS-x86_64-${{ github.ref_name }}"
+          else
+            echo "::error::dist/YunX not found"
+            ls -la dist/ || true
+            exit 1
+          fi
+          shasum -a 256 "dist/YunX-macOS-x86_64-${{ github.ref_name }}" | awk '{print tolower($1)"  "$2}' >> "dist/SHA256SUMS.txt"
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/YunX-macOS-x86_64-${{ github.ref_name }}
+        fail_on_unmatched_files: true
+
+  # ---------------- Linux ----------------
   build-linux:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
@@ -128,35 +180,38 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-tk
-          pip install --upgrade pip
-          pip install pyinstaller requests aiohttp cryptography
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller mutagen
           pip install -r requirements-core.txt
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (spec)
         run: |
-          cd desktop_gui
-          pyinstaller --noconfirm --clean --onefile --windowed \
-            --name "YunX-Linux" \
-            --add-data "../core:core" \
-            --hidden-import aiohttp \
-            --hidden-import cryptography \
-            main.py
+          pyinstaller --noconfirm --clean desktop_gui/desktop_gui.spec
 
       - name: Package release
         run: |
           mkdir -p dist
-          if [ -f "desktop_gui/dist/YunX-Linux" ]; then
-            cp "desktop_gui/dist/YunX-Linux" "dist/YunX-Linux-${{ github.ref_name }}"
-            chmod +x "dist/YunX-Linux-${{ github.ref_name }}"
+          if [ -f "dist/YunX" ]; then
+            cp "dist/YunX" "dist/YunX-Linux-x86_64-${{ github.ref_name }}"
+            chmod +x "dist/YunX-Linux-x86_64-${{ github.ref_name }}"
+          else
+            echo "::error::dist/YunX not found"
+            ls -la dist/ || true
+            exit 1
           fi
-          shasum -a 256 dist/* >> dist/SHA256SUMS.txt 2>/dev/null || true
+          shasum -a 256 "dist/YunX-Linux-x86_64-${{ github.ref_name }}" | awk '{print tolower($1)"  "$2}' >> "dist/SHA256SUMS.txt"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          name: YunX-Linux
-          path: dist/
+          files: |
+            dist/YunX-Linux-x86_64-${{ github.ref_name }}
+        fail_on_unmatched_files: true
