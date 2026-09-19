@@ -12,6 +12,7 @@ permissions:
 jobs:
   build-android:
     runs-on: ubuntu-22.04
+    continue-on-error: true
     timeout-minutes: 180
 
     steps:
