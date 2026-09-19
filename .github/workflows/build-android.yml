@@ -36,7 +36,7 @@ jobs:
             -v ${{ github.workspace }}:/project \
             -w /project/mobile_gui \
             kivy/buildozer:latest \
-            bash -c "buildozer -v android debug && chmod -R a+rw /project"
+            bash -c "yes | buildozer -v android debug && chmod -R a+rw /project"
         timeout-minutes: 150
 
       - name: Find and copy APK
