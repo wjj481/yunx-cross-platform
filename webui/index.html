@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#1976D2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="云析">
+  <title>云析 - 视频音乐解析下载</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- ===== 顶部导航 ===== -->
+  <header class="app-header">
+    <div class="header-inner">
+      <h1 class="app-title">云析</h1>
+      <button class="header-btn" id="btn-settings" aria-label="设置">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== 主内容区 ===== -->
+  <main class="app-main">
+
+    <!-- ===== 视图：解析页 ===== -->
+    <section id="view-parse" class="view active">
+      <div class="parse-card">
+        <div class="input-group">
+          <textarea id="url-input" class="url-input" placeholder="粘贴视频或音乐链接..." rows="2"></textarea>
+          <div class="input-actions">
+            <button class="btn btn-secondary" id="btn-paste">粘贴</button>
+            <button class="btn btn-primary" id="btn-parse">解析</button>
+          </div>
+        </div>
+        <div class="platform-hints">
+          <span class="hint-chip">B站</span>
+          <span class="hint-chip">抖音</span>
+          <span class="hint-chip">YouTube</span>
+          <span class="hint-chip">网易云</span>
+          <span class="hint-chip">QQ音乐</span>
+        </div>
+      </div>
+
+      <!-- 解析结果 -->
+      <div id="parse-result" class="parse-result hidden">
+        <div class="result-card">
+          <div class="result-cover-wrap">
+            <img id="result-cover" class="result-cover" src="" alt="封面">
+          </div>
+          <div class="result-info">
+            <h2 id="result-title" class="result-title"></h2>
+            <p id="result-meta" class="result-meta"></p>
+          </div>
+        </div>
+
+        <div class="quality-section">
+          <h3 class="section-title">选择清晰度/音质</h3>
+          <div id="quality-list" class="quality-list"></div>
+        </div>
+
+        <button class="btn btn-primary btn-block" id="btn-download">下载</button>
+      </div>
+
+      <!-- 错误提示 -->
+      <div id="parse-error" class="error-box hidden"></div>
+
+      <!-- 支持平台说明 -->
+      <div class="info-card">
+        <h3 class="section-title">使用说明</h3>
+        <ul class="info-list">
+          <li>粘贴链接后点击「解析」，选择清晰度后下载</li>
+          <li>下载完成后可在 Safari 弹出的菜单中选择「存储到文件」</li>
+          <li>长按时可选择下载清晰度</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ===== 视图：下载管理 ===== -->
+    <section id="view-downloads" class="view">
+      <div class="downloads-header">
+        <h2 class="view-title">下载管理</h2>
+        <span class="download-count" id="download-count">0 个任务</span>
+      </div>
+      <div id="download-list" class="download-list">
+        <div class="empty-state" id="downloads-empty">
+          <p>暂无下载任务</p>
+          <p class="empty-hint">解析视频后点击下载即可添加任务</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 视图：设置 ===== -->
+    <section id="view-settings" class="view">
+      <h2 class="view-title">设置</h2>
+
+      <div class="settings-group">
+        <h3 class="settings-label">默认清晰度</h3>
+        <select id="setting-quality" class="setting-select">
+          <option value="auto">自动（最高可用）</option>
+          <option value="1080p">1080P</option>
+          <option value="720p">720P</option>
+          <option value="480p">480P</option>
+          <option value="360p">360P</option>
+        </select>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-label">并发下载数</h3>
+        <select id="setting-concurrency" class="setting-select">
+          <option value="1">1 个</option>
+          <option value="2" selected>2 个（推荐）</option>
+        </select>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-label">CORS 代理</h3>
+        <select id="setting-proxy" class="setting-select">
+          <option value="">不使用代理</option>
+          <option value="https://corsproxy.io/?url=" selected>corsproxy.io</option>
+          <option value="https://api.allorigins.win/raw?url=">allorigins.win</option>
+          <option value="custom">自定义...</option>
+        </select>
+        <input type="text" id="setting-proxy-custom" class="setting-input hidden" placeholder="输入代理前缀，如 https://your-proxy/?url=">
+        <p class="setting-hint">部分平台需要代理才能跨域请求。如代理失效可自行更换。</p>
+      </div>
+
+      <div class="settings-group">
+        <h3 class="settings-label">关于</h3>
+        <div class="about-card">
+          <p class="about-name">云析 Web 客户端</p>
+          <p class="about-version">版本 v0.1.0 (Web)</p>
+          <p class="about-desc">纯前端视频/音乐解析下载工具</p>
+        </div>
+      </div>
+
+      <!-- 限制与免责声明 -->
+      <div class="settings-group">
+        <h3 class="settings-label">限制说明与免责声明</h3>
+        <div class="disclaimer-card">
+          <p><strong>已知限制：</strong></p>
+          <ul>
+            <li>由于浏览器跨域安全限制，<strong>不支持自动上传云盘</strong>，下载的文件需手动保存到 iPhone「文件」App</li>
+            <li><strong>DRM 加密视频不支持</strong>，受版权保护的内容将提示"资源受保护"</li>
+            <li>部分平台有防盗链机制，可能导致解析失败，此时会给出友好提示</li>
+            <li>B站高清晰度（1080P+）和无损音质需要登录 Cookie，纯前端无法安全保存凭证，建议在桌面端使用完整版本</li>
+            <li>各平台解析接口可能随时变化，解析功能可能失效</li>
+          </ul>
+          <p><strong>免责声明：</strong></p>
+          <p>本工具仅供个人学习与技术研究使用，请勿用于商业用途或侵犯他人版权。下载的内容请于 24 小时内删除。使用本工具产生的任何法律责任由使用者自行承担。</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===== 底部导航 ===== -->
+  <nav class="app-tabbar">
+    <button class="tab-item active" data-view="parse">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+      <span>解析</span>
+    </button>
+    <button class="tab-item" data-view="downloads">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+      <span>下载</span>
+    </button>
+    <button class="tab-item" data-view="settings">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+      <span>我的</span>
+    </button>
+  </nav>
+
+  <!-- Toast 提示 -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="js/crypto.js"></script>
+  <script src="js/parsers.js"></script>
+  <script src="js/m3u8.js"></script>
+  <script src="js/downloader.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
