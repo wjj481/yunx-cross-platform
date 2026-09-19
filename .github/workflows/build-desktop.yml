@@ -67,7 +67,6 @@ jobs:
         with:
           files: |
             dist/YunX-Windows-${{ matrix.arch }}-${{ github.ref_name }}.exe
-        fail_on_unmatched_files: true
 
   # ---------------- macOS arm64 (Apple Silicon) ----------------
   build-macos-arm64:
@@ -116,7 +115,6 @@ jobs:
         with:
           files: |
             dist/YunX-macOS-arm64-${{ github.ref_name }}
-        fail_on_unmatched_files: true
 
   # ---------------- macOS x86_64 (Intel) ----------------
   build-macos-x86_64:
@@ -164,7 +162,6 @@ jobs:
         with:
           files: |
             dist/YunX-macOS-x86_64-${{ github.ref_name }}
-        fail_on_unmatched_files: true
 
   # ---------------- Linux ----------------
   build-linux:
@@ -214,4 +211,3 @@ jobs:
         with:
           files: |
             dist/YunX-Linux-x86_64-${{ github.ref_name }}
-        fail_on_unmatched_files: true

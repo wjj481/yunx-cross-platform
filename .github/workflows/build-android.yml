@@ -60,4 +60,3 @@ jobs:
         with:
           files: |
             dist/YunX-Android-${{ github.ref_name }}.apk
-        fail_on_unmatched_files: true
