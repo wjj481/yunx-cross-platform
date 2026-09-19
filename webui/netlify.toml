@@ -1,0 +1,14 @@
+# Netlify 部署配置
+# 连接 GitHub 仓库后，base directory 设为 webui/
+
+[build]
+  publish = "."
+  command = ""
+
+# 安全头
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
