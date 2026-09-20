@@ -1,4 +1,6 @@
 # YunX 全平台多媒体解析下载 + 云盘上传工具
+> ⚠️ 本项目全部代码与内容由 AI 生成，仅供学习交流使用，请勿用于商业用途。
+
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/wjj481/yunx-cross-platform/releases)
